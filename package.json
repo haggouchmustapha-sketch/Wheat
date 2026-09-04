@@ -1,0 +1,270 @@
+{
+  "name": "wheat",
+  "private": true,
+  "version": "2.1.260904",
+  "description": "Wheat — free, local-first desktop accounting for Moroccan businesses.",
+  "author": "Wheat",
+  "license": "GPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/haggouchmustapha-sketch/Wheat.git"
+  },
+  "type": "module",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev": "npm run prisma:generate && vite --host 127.0.0.1",
+    "clean": "node scripts/clean-build.mjs",
+    "build": "npm run clean && npm run prisma:generate && tsc -b && vite build",
+    "installer": "npm run db:reset && npm run icon:ico && npm run build && electron-builder --win nsis --x64",
+    "portable": "npm run db:reset && npm run icon:ico && npm run build && electron-builder --win portable --x64",
+    "pack": "npm run db:reset && npm run icon:ico && npm run build && electron-builder --dir",
+    "update:package": "node scripts/package-update.mjs",
+    "update:keygen": "node scripts/generate-update-key.mjs",
+    "release:prepare": "node scripts/release-prepare.mjs",
+    "release:publish": "node scripts/release-publish.mjs",
+    "test:desktop": "npm run db:reset && npm run build && playwright test tests/electron-smoke.spec.cjs --reporter=line",
+    "test:ocr": "npm run db:reset && npm run build && playwright test tests/ocr-meaningful.spec.cjs --reporter=line",
+    "test:updater": "playwright test tests/updater.spec.cjs tests/updater-https.spec.cjs tests/updater-github.spec.cjs tests/updater-signature.spec.cjs tests/updater-release-tooling.spec.cjs tests/updater-user-data.spec.cjs tests/updater-electron.spec.cjs --reporter=line",
+    "paddle:setup": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup-paddleocr.ps1",
+    "paddle:check": "resources\\paddleocr\\runtime\\python.exe resources\\paddleocr\\worker.py --health",
+    "prisma:generate": "prisma generate",
+    "db:push": "prisma db push",
+    "db:seed": "tsx prisma/seed.ts",
+    "db:reset": "prisma migrate reset --force --skip-seed && npm run db:seed",
+    "icon:ico": "tsx scripts/make-icon.ts",
+    "lint": "eslint .",
+    "preview": "vite preview",
+    "ocr:bench": "node scripts/ocr-benchmark.cjs",
+    "ocr:accuracy": "node scripts/ocr-accuracy.cjs"
+  },
+  "dependencies": {
+    "@fontsource/inter": "^5.2.8",
+    "@prisma/client": "^6.19.3",
+    "@tesseract.js-data/ara": "^1.0.0",
+    "@tesseract.js-data/eng": "^1.0.0",
+    "@tesseract.js-data/fra": "^1.0.0",
+    "archiver": "5.3.2",
+    "clsx": "^2.1.1",
+    "date-fns": "^4.2.1",
+    "exceljs": "^4.4.0",
+    "framer-motion": "^12.39.0",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.8",
+    "lucide-react": "^1.16.0",
+    "pdf-parse": "^2.4.5",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "recharts": "^3.8.1",
+    "semver": "^7.8.5",
+    "sharp": "^0.35.3",
+    "tesseract.js": "^7.0.0",
+    "unzipper": "0.10.14"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.60.0",
+    "@tailwindcss/vite": "^4.3.0",
+    "@types/node": "^24.12.3",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@types/semver": "^7.8.0",
+    "@vitejs/plugin-react": "^6.0.1",
+    "concurrently": "^9.2.1",
+    "cross-env": "^10.1.0",
+    "electron": "^42.2.0",
+    "electron-builder": "^26.8.1",
+    "eslint": "^10.3.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.2",
+    "globals": "^17.6.0",
+    "npm-run-all": "^4.1.5",
+    "png-to-ico": "^3.0.1",
+    "prisma": "^6.19.3",
+    "tailwindcss": "^4.3.0",
+    "tsx": "^4.22.3",
+    "typescript": "~6.0.2",
+    "typescript-eslint": "^8.59.2",
+    "vite": "^8.0.12",
+    "vite-plugin-electron": "^0.29.1",
+    "vite-plugin-electron-renderer": "^0.14.7",
+    "wait-on": "^9.0.10"
+  },
+  "overrides": {
+    "deepmerge-ts": "8.0.1",
+    "uuid": "11.1.1"
+  },
+  "build": {
+    "appId": "ma.atlasledger.desktop",
+    "productName": "Wheat",
+    "artifactName": "WheatSetup-${version}.${ext}",
+    "directories": {
+      "output": "release/${version}"
+    },
+    "files": [
+      "LICENSE",
+      "dist/**",
+      "dist-electron/**",
+      {
+        "from": "node_modules/.prisma",
+        "to": "node_modules/.prisma",
+        "filter": [
+          "**/*"
+        ]
+      },
+      "node_modules/@prisma/**",
+      "node_modules/@prisma/client/**",
+      "node_modules/@napi-rs/**",
+      "node_modules/@fast-csv/**",
+      "node_modules/archiver/**",
+      "node_modules/archiver-utils/**",
+      "node_modules/async/**",
+      "node_modules/balanced-match/**",
+      "node_modules/base64-js/**",
+      "node_modules/big-integer/**",
+      "node_modules/binary/**",
+      "node_modules/bl/**",
+      "node_modules/bluebird/**",
+      "node_modules/brace-expansion/**",
+      "node_modules/buffer/**",
+      "node_modules/buffer-crc32/**",
+      "node_modules/buffer-indexof-polyfill/**",
+      "node_modules/buffers/**",
+      "node_modules/chainsaw/**",
+      "node_modules/compress-commons/**",
+      "node_modules/crc-32/**",
+      "node_modules/crc32-stream/**",
+      "node_modules/dayjs/**",
+      "node_modules/duplexer2/**",
+      "node_modules/end-of-stream/**",
+      "node_modules/exceljs/**",
+      "node_modules/fast-csv/**",
+      "node_modules/fs-constants/**",
+      "node_modules/fs.realpath/**",
+      "node_modules/fstream/**",
+      "node_modules/pdf-parse/**",
+      "node_modules/pdfjs-dist/**",
+      "node_modules/graceful-fs/**",
+      "node_modules/ieee754/**",
+      "node_modules/immediate/**",
+      "node_modules/inflight/**",
+      "node_modules/inherits/**",
+      "node_modules/jszip/**",
+      "node_modules/lazystream/**",
+      "node_modules/lie/**",
+      "node_modules/listenercount/**",
+      "node_modules/lodash.defaults/**",
+      "node_modules/lodash.difference/**",
+      "node_modules/lodash.escaperegexp/**",
+      "node_modules/lodash.flatten/**",
+      "node_modules/lodash.groupby/**",
+      "node_modules/lodash.isboolean/**",
+      "node_modules/lodash.isequal/**",
+      "node_modules/lodash.isfunction/**",
+      "node_modules/lodash.isnil/**",
+      "node_modules/lodash.isplainobject/**",
+      "node_modules/lodash.isundefined/**",
+      "node_modules/lodash.union/**",
+      "node_modules/lodash.uniq/**",
+      "node_modules/minimatch/**",
+      "node_modules/minimist/**",
+      "node_modules/mkdirp/**",
+      "node_modules/normalize-path/**",
+      "node_modules/pako/**",
+      "node_modules/path-is-absolute/**",
+      "node_modules/readdir-glob/**",
+      "node_modules/rimraf/**",
+      "node_modules/safe-buffer/**",
+      "node_modules/saxes/**",
+      "node_modules/setimmediate/**",
+      "node_modules/string_decoder/**",
+      "node_modules/tar-stream/**",
+      "node_modules/tmp/**",
+      "node_modules/traverse/**",
+      "node_modules/unzipper/**",
+      "node_modules/util-deprecate/**",
+      "node_modules/uuid/**",
+      "node_modules/wrappy/**",
+      "node_modules/xmlchars/**",
+      "node_modules/zip-stream/**",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/.prisma/client/query_engine-*.node",
+      "node_modules/@img/**",
+      "node_modules/@napi-rs/**",
+      "node_modules/bmp-js/**",
+      "node_modules/detect-libc/**",
+      "node_modules/is-url/**",
+      "node_modules/node-fetch/**",
+      "node_modules/regenerator-runtime/**",
+      "node_modules/sharp/**",
+      "node_modules/tesseract.js/**",
+      "node_modules/tesseract.js-core/**",
+      "node_modules/tr46/**",
+      "node_modules/wasm-feature-detect/**",
+      "node_modules/webidl-conversions/**",
+      "node_modules/whatwg-url/**",
+      "node_modules/zlibjs/**"
+    ],
+    "extraResources": [
+      {
+        "from": "prisma/dev.db",
+        "to": "seed/wheat-seed.db"
+      },
+      {
+        "from": "resources/tessdata",
+        "to": "tessdata"
+      },
+      {
+        "from": "node_modules/tesseract.js-core",
+        "to": "ocr/tesseract.js-core"
+      },
+      {
+        "from": "node_modules/pdf-parse/dist/worker/pdf.worker.mjs",
+        "to": "ocr/pdf.worker.mjs"
+      },
+      {
+        "from": "resources/paddleocr",
+        "to": "paddleocr",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "resources/models",
+        "to": "models",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "resources/updater/update-helper.ps1",
+        "to": "updater/update-helper.ps1"
+      }
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Wheat",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico"
+    },
+    "portable": {
+      "artifactName": "WheatPortable-${version}.${ext}",
+      "unpackDirName": "WheatPortable"
+    }
+  }
+}

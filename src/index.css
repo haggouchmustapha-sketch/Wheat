@@ -1,0 +1,70 @@
+@import "tailwindcss";
+@import "@fontsource/inter/400.css";
+@import "@fontsource/inter/500.css";
+@import "@fontsource/inter/600.css";
+@import "@fontsource/inter/700.css";
+
+:root {
+  font-family: Inter, sans-serif;
+  color: #2b1e17;
+  background: #f6eee5;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+  font-family: inherit;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  min-height: 0;
+  margin: 0;
+}
+
+body {
+  overflow: hidden;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  -webkit-app-region: no-drag;
+  pointer-events: auto;
+}
+
+button {
+  cursor: pointer;
+}
+
+input,
+textarea {
+  cursor: text;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* Batch import progress, shown while a folder of pieces is recognised. */
+.ocr-progress {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: var(--space-3) 0 0;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.ocr-progress progress {
+  flex: 0 0 180px;
+  height: 6px;
+  accent-color: var(--brand);
+}

@@ -1,0 +1,193 @@
+/*
+ * The one gate in Wheat.
+ *
+ * Styled as a calm explanation rather than an error: nothing has gone wrong,
+ * the dossier is simply not finished being set up. Warning colours here would
+ * tell the accountant they had made a mistake, which they have not.
+ */
+
+.wt-setup-gate {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-2);
+  padding: var(--space-5);
+  margin-bottom: var(--space-5);
+}
+
+.wt-setup-gate__head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.wt-setup-gate__head h2 {
+  margin: 0 0 var(--space-1);
+  font-size: var(--text-lg);
+}
+
+.wt-setup-gate__head p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  max-width: 72ch;
+}
+
+/* ------------------------------------------------------------ the question */
+
+.wt-setup-gate__question {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  padding: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.wt-setup-gate__question h3 {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-base);
+}
+
+.wt-setup-gate__why,
+.wt-setup-gate__where {
+  margin: 0 0 var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  max-width: 72ch;
+}
+
+.wt-setup-gate__choices {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.wt-setup-gate__choice {
+  display: grid;
+  gap: 2px;
+  text-align: left;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  cursor: pointer;
+  font: inherit;
+  color: var(--text);
+}
+
+.wt-setup-gate__choice:hover:not(:disabled) {
+  border-color: var(--primary);
+}
+
+.wt-setup-gate__choice:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.wt-setup-gate__choice span {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+/* ------------------------------------------------------- what is still missing */
+
+.wt-setup-gate__stages {
+  list-style: none;
+  margin: 0 0 var(--space-4);
+  padding: 0;
+  display: grid;
+  gap: var(--space-2);
+}
+
+.wt-setup-gate__stages li {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  color: var(--text-muted);
+}
+
+.wt-setup-gate__stages li[data-done="true"] {
+  color: var(--text);
+}
+
+.wt-setup-gate__stages li > div {
+  display: grid;
+  gap: 1px;
+}
+
+.wt-setup-gate__stages strong {
+  font-size: var(--text-sm);
+}
+
+.wt-setup-gate__stages span {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  max-width: 78ch;
+}
+
+/* ------------------------------------------------------------- the approval */
+
+.wt-setup-gate__foot {
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-4);
+}
+
+.wt-setup-gate__summary {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.wt-setup-gate__summary ul {
+  margin: var(--space-1) 0 0;
+  padding-left: var(--space-4);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.wt-setup-gate__unlock {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--primary);
+  border-radius: var(--radius-md);
+  background: var(--primary);
+  /* Tokens carry both themes; a literal here would only be right in one. */
+  color: var(--on-primary);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.wt-setup-gate__unlock:disabled {
+  opacity: 0.7;
+  cursor: default;
+}
+
+.wt-setup-gate__blocking {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  max-width: 78ch;
+}
+
+.wt-setup-gate__spin {
+  animation: wt-setup-gate-spin 1s linear infinite;
+}
+
+@keyframes wt-setup-gate-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wt-setup-gate__spin { animation: none; }
+}
+
+/* A recommendation reads differently from a requirement. */
+.wt-setup-gate__stages strong em {
+  font-style: normal;
+  font-weight: 400;
+  color: var(--text-muted);
+}

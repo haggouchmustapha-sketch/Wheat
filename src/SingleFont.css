@@ -1,0 +1,12 @@
+html body #root,
+html body #root *,
+html body #root *::before,
+html body #root *::after {
+  font-family: Inter !important;
+}
+
+/* The Wheat wordmark is the one place the brand serif is allowed through. */
+html body #root .wheat-wordmark,
+html body #root .wheat-wordmark * {
+  font-family: var(--font-brand) !important;
+}

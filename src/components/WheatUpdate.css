@@ -1,0 +1,58 @@
+/**
+ * Update dialogs. Everything resolves through the design tokens in
+ * src/styles/tokens.css so light and dark stay identical to the rest of Wheat.
+ */
+
+.wheat-update__lead {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.wheat-update__notes {
+  margin: 0;
+  padding-left: var(--space-7);
+  list-style: disc;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.wheat-update__progress {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.wheat-update__bar {
+  height: 8px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
+  overflow: hidden;
+}
+
+.wheat-update__bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--brand);
+  /* Follows the real byte count. Never animated on its own — a bar that moves
+     without bytes behind it would be inventing progress. */
+  transition: width 200ms linear;
+}
+
+.wheat-update__progress-figure {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin: 0;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.wheat-update__progress-figure strong {
+  color: var(--text);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wheat-update__bar-fill { transition: none; }
+}

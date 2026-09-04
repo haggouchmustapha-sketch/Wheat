@@ -1,0 +1,162 @@
+.fiscal-ws-fiscal-adjustments {
+  margin-top: 18px;
+}
+
+.fiscal-ws-fiscal-adjustments > div:first-child {
+  margin-bottom: 12px;
+}
+
+.fiscal-ws-fiscal-adjustments .fiscal-ws-table-wrap {
+  min-height: 0;
+  max-height: 280px;
+}
+
+.fiscal-ws-adjustment-form {
+  display: grid;
+  grid-template-columns: 160px minmax(180px, 1fr) 160px minmax(220px, 1.2fr) auto;
+  gap: 12px;
+  align-items: end;
+  margin-top: 16px;
+}
+
+.fiscal-ws-adjustment-form label {
+  min-width: 0;
+}
+
+.fiscal-ws-adjustment-form input,
+.fiscal-ws-adjustment-form select {
+  width: 100%;
+}
+
+.fiscal-ws-adjustment-verified { display: inline-flex; align-items: center; gap: 5px; color: var(--a21-green); font-weight: 700; }
+
+@media (max-width: 1180px) {
+  .fiscal-ws-adjustment-form {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 700px) {
+  .fiscal-ws-adjustment-form {
+    grid-template-columns: 1fr;
+  }
+}
+
+.fiscal-ws-liasse-workspace {
+  margin-top: 20px;
+  border-top: 1px solid var(--a21-line);
+}
+
+.fiscal-ws-liasse-bar {
+  position: sticky;
+  top: 0;
+  z-index: 12;
+  display: grid;
+  grid-template-columns: minmax(320px, 620px) minmax(180px, 1fr);
+  align-items: center;
+  gap: 24px;
+  padding: 14px 0;
+  background: var(--background);
+}
+
+.fiscal-ws-liasse-picker { position: relative; display: grid; gap: 4px; }
+.fiscal-ws-liasse-picker__label { color: var(--muted); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
+.fiscal-ws-liasse-picker .wt-select__trigger { min-height: 54px; }
+
+.fiscal-ws-reason-backdrop { position: fixed; inset: 0; z-index: 120; display: grid; place-items: safe center; padding: 18px; overflow: auto; overscroll-behavior: contain; background: color-mix(in srgb, var(--text) 54%, transparent); }
+.fiscal-ws-reason-backdrop > * { max-height: 100%; max-width: 100%; }
+.fiscal-ws-reason-dialog { width: min(470px, 100%); border: 1px solid var(--a21-line); border-radius: 7px; background: var(--panel); box-shadow: 0 24px 70px color-mix(in srgb, var(--text) 28%, transparent); padding: 22px; overflow: auto; overscroll-behavior: contain; }
+.fiscal-ws-reason-dialog h3 { margin: 6px 0 8px; font-size: 20px; }
+.fiscal-ws-reason-dialog > p:not(.fiscal-ws-kicker) { margin: 0 0 15px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.fiscal-ws-reason-dialog label { display: grid; gap: 6px; color: var(--muted); font-size: 11px; font-weight: 650; }
+.fiscal-ws-reason-dialog textarea { resize: vertical; min-height: 84px; border: 1px solid var(--a21-line); border-radius: 4px; background: transparent; color: inherit; padding: 9px; font: inherit; }
+.fiscal-ws-reason-dialog textarea:focus { outline: 0; border-color: var(--a21-green); box-shadow: 0 0 0 3px color-mix(in srgb, var(--a21-green) 12%, transparent); }
+.fiscal-ws-reason-dialog > div { display: flex; justify-content: flex-end; gap: 8px; margin-top: 15px; }
+.fiscal-ws-reason-dialog button { border: 1px solid var(--a21-line); border-radius: 4px; background: transparent; color: inherit; padding: 8px 11px; font-weight: 650; }
+
+.fiscal-ws-liasse-progress { position: relative; height: 28px; border-bottom: 2px solid var(--a21-line); }
+.fiscal-ws-liasse-progress > span { position: absolute; left: 0; bottom: -2px; height: 2px; background: var(--a21-green); transition: width .25s ease; }
+.fiscal-ws-liasse-progress small { position: absolute; right: 0; top: 0; color: var(--muted); font-size: 11px; }
+.fiscal-ws-liasse-body { min-height: 360px; padding: 20px 0 4px; }
+
+.fiscal-ws-workpaper-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; padding-bottom: 16px; border-bottom: 1px solid var(--a21-line); }
+.fiscal-ws-workpaper-head h2 { margin: 5px 0; font: 500 27px/1.15 Georgia, serif; }
+.fiscal-ws-workpaper-head p { margin: 0; color: var(--muted); font-size: 11px; }
+.fiscal-ws-workpaper-status { padding: 6px 8px; border-left: 2px solid var(--a21-line); color: var(--muted); font: 700 10px/1.2 ui-monospace, monospace; text-transform: uppercase; letter-spacing: .07em; white-space: nowrap; }
+.fiscal-ws-workpaper-status.reviewed,
+.fiscal-ws-workpaper-status.not_applicable { border-color: var(--a21-green); color: var(--a21-green); }
+.fiscal-ws-workpaper-status.stale { border-color: var(--amber); color: var(--amber); }
+
+.fiscal-ws-workpaper-section { margin-top: 18px; }
+.fiscal-ws-workpaper-section h3,
+.fiscal-ws-manual-block h3 { margin: 0 0 9px; font: 500 19px/1.2 Georgia, serif; }
+.fiscal-ws-workpaper-section .fiscal-ws-table-wrap,
+.fiscal-ws-manual-block .fiscal-ws-table-wrap { min-height: 0; max-height: 360px; }
+.fiscal-ws-workpaper-section .fiscal-ws-table td:nth-child(n+3) { text-align: right; font-variant-numeric: tabular-nums; }
+.fiscal-ws-empty.fiscal { min-height: 150px; display: grid; place-content: center; justify-items: center; gap: 6px; border-bottom: 1px solid var(--a21-line); }
+
+.fiscal-ws-manual-block { margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--a21-line); }
+.fiscal-ws-editable-table { min-width: 900px; }
+.fiscal-ws-editable-table th:last-child,
+.fiscal-ws-editable-table td:last-child { width: 38px; }
+.fiscal-ws-editable-table input {
+  width: 100%;
+  min-width: 120px;
+  padding: 7px 8px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--panel) 88%, var(--a21-green) 4%);
+  color: inherit;
+}
+.fiscal-ws-editable-table input:focus { border-color: var(--a21-green); outline: none; }
+.fiscal-ws-editable-table input:disabled { background: transparent; }
+.fiscal-ws-editable-table button,
+.fiscal-ws-add-row { border: 0; background: transparent; color: var(--muted); }
+.fiscal-ws-add-row { display: inline-flex; align-items: center; gap: 6px; padding: 10px 0; color: var(--a21-green); font-weight: 700; }
+
+.fiscal-ws-evidence-row { display: grid; grid-template-columns: 1fr auto; gap: 22px; align-items: end; padding: 18px 0; border-top: 1px solid var(--a21-line); }
+.fiscal-ws-evidence-row > div:first-child > span { display: inline-flex; align-items: center; gap: 8px; margin: 4px 8px 0 0; padding: 5px 7px; background: color-mix(in srgb, var(--a21-green) 7%, transparent); font-size: 10px; }
+.fiscal-ws-evidence-row span small { color: var(--muted); }
+.fiscal-ws-evidence-row span button { border: 0; background: transparent; color: inherit; font-size: 16px; }
+.fiscal-ws-evidence-row > div:last-child { display: flex; gap: 7px; }
+.fiscal-ws-evidence-row select,
+.fiscal-ws-evidence-row > div:last-child button,
+.fiscal-ws-workpaper-actions button { border: 1px solid var(--a21-line); border-radius: 5px; background: var(--panel); color: inherit; padding: 8px 10px; }
+
+.fiscal-ws-workpaper-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; padding-top: 16px; border-top: 1px solid var(--a21-line); }
+.fiscal-ws-na-reason { margin: 20px 0; padding: 15px 17px; border-left: 3px solid var(--a21-green); background: color-mix(in srgb, var(--a21-green) 6%, transparent); }
+.fiscal-ws-na-reason p { margin: 4px 0 0; color: var(--muted); }
+
+.fiscal-ws-control-grid { display: grid; grid-template-columns: minmax(0, .8fr) minmax(440px, 1.2fr); gap: 34px; }
+.fiscal-ws-control-grid h2 { margin: 6px 0 18px; font: 500 27px/1.16 Georgia, serif; }
+.fiscal-ws-control-check { display: flex; align-items: flex-start; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--a21-line); }
+.fiscal-ws-control-check.ok { color: var(--a21-green); }
+.fiscal-ws-control-check.issue { color: var(--amber); }
+.fiscal-ws-control-check span,
+.fiscal-ws-control-check strong,
+.fiscal-ws-control-check small { display: block; }
+.fiscal-ws-control-check small { margin-top: 2px; color: var(--muted); }
+.fiscal-ws-control-list { border-top: 1px solid var(--a21-line); }
+.fiscal-ws-control-list > p { padding: 12px 10px 7px; }
+.fiscal-ws-control-list button { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 8px 10px; border: 0; border-bottom: 1px solid var(--a21-line); background: transparent; color: inherit; text-align: left; }
+.fiscal-ws-control-list button:hover { background: color-mix(in srgb, var(--a21-green) 5%, transparent); }
+.fiscal-ws-control-list button span { display: flex; align-items: baseline; gap: 11px; min-width: 0; }
+.fiscal-ws-control-list button b { min-width: 22px; color: var(--a21-green); font: 700 10px ui-monospace, monospace; }
+.fiscal-ws-control-list button strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.fiscal-ws-control-list button small { flex: 0 0 auto; font-size: 9px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.fiscal-ws-control-list button small.reviewed,
+.fiscal-ws-control-list button small.not_applicable { color: var(--a21-green); }
+.fiscal-ws-control-list button small.stale { color: var(--amber); }
+
+@media (max-width: 1000px) {
+  .fiscal-ws-liasse-bar,
+  .fiscal-ws-control-grid { grid-template-columns: 1fr; }
+  .fiscal-ws-liasse-bar { position: static; gap: 10px; }
+  .fiscal-ws-evidence-row { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 700px) {
+  .fiscal-ws-liasse-menu { width: calc(100vw - 32px); }
+  .fiscal-ws-workpaper-head { flex-direction: column; gap: 10px; }
+  .fiscal-ws-evidence-row > div:last-child { align-items: stretch; flex-direction: column; }
+}

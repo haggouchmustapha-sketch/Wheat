@@ -1,0 +1,373 @@
+/* Guided work.
+   Every value resolves through the Wheat design tokens, so the screen follows
+   light and dark mode without a second palette of its own. */
+
+.wt-guided {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.wt-guided__head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.wt-guided__state {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  margin: 0 0 var(--space-4);
+}
+
+/* ------------------------------------------------------ what Wheat detected */
+
+.wt-guided__detected {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--space-3);
+  margin: 0 0 var(--space-4);
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+}
+
+.wt-guided__detected-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.wt-guided__detected-item dt {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.wt-guided__detected-item dd {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+/* --------------------------------------------------- the proposed operations */
+
+.wt-guided__ops {
+  list-style: none;
+  margin: 0 0 var(--space-4);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.wt-guided__op {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: var(--space-4);
+  align-items: start;
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+/* The status is carried by a colour *and* by the badge text beside it, never
+   by colour alone. */
+.wt-guided__op[data-status="READY"] { border-left-color: var(--success); }
+.wt-guided__op[data-status="REVIEW"] { border-left-color: var(--warning); }
+.wt-guided__op[data-status="BLOCKED"] {
+  border-left-color: var(--danger);
+  background: var(--surface-sunken);
+}
+
+.wt-guided__op-check {
+  display: flex;
+  align-items: center;
+  padding-top: 2px;
+}
+
+.wt-guided__op-check input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--brand);
+  cursor: pointer;
+}
+
+.wt-guided__op-check input:disabled { cursor: not-allowed; }
+
+.wt-guided__op-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.wt-guided__op-title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.wt-guided__op-detail {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.wt-guided__op-attention {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--warning);
+}
+
+.wt-guided__op-reasons {
+  margin: var(--space-2) 0 0;
+  padding-left: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.wt-guided__op-more {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: var(--text-xs);
+  color: var(--brand-text);
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.wt-guided__op-side {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.wt-guided__op-confidence {
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+/* ------------------------------------------------------------ the approval */
+
+.wt-guided__approve {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+
+.wt-guided__approve-note {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+/* -------------------------------------------------------- what happened */
+
+.wt-guided__result {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--success);
+}
+
+.wt-guided__result li {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.wt-guided__result--failed {
+  margin-top: var(--space-3);
+  color: var(--danger);
+}
+
+/* ------------------------------------------------------------- the parcours */
+
+.wt-guided__steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.wt-guided__step {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: var(--space-4);
+  align-items: start;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+}
+
+.wt-guided__step:hover { background: var(--surface-hover); }
+.wt-guided__step[data-status="READY"] { border-color: var(--brand-border); }
+.wt-guided__step[data-status="NEEDS_ANSWER"] { border-color: var(--warning-border); }
+
+.wt-guided__step-order {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.wt-guided__step-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.wt-guided__step-title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.wt-guided__step-state,
+.wt-guided__step-why {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.wt-guided__step-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.wt-guided__inferred {
+  list-style: none;
+  margin: var(--space-4) 0 0;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.wt-guided__inferred li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* A narrow window stacks each row rather than scrolling the page sideways. */
+@media (max-width: 720px) {
+  .wt-guided__op,
+  .wt-guided__step {
+    grid-template-columns: auto 1fr;
+  }
+
+  .wt-guided__op-side,
+  .wt-guided__step-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+}
+
+/* ---------------------------------------------------------------- */
+/* Inline correction                                                 */
+/*                                                                   */
+/* A prepared row that is complete except for one decision should     */
+/* cost that one decision, not a trip to another screen. The form     */
+/* sits inside the row it belongs to and is deliberately quiet: it    */
+/* only appears on rows Wheat actually has a question about.          */
+/* ---------------------------------------------------------------- */
+
+.wt-guided__op-suggestion {
+  margin-top: var(--wt-space-2);
+  padding: var(--wt-space-2) var(--wt-space-3);
+  border-left: 3px solid var(--wt-info-border, var(--wt-border));
+  background: var(--wt-surface-muted);
+  border-radius: var(--wt-radius-sm);
+  display: grid;
+  gap: var(--wt-space-2);
+  justify-items: start;
+}
+
+.wt-guided__op-suggestion p {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--wt-text-muted);
+}
+
+.wt-guided__op-edits {
+  margin-top: var(--wt-space-2);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--wt-space-3);
+}
+
+.wt-guided__op-edit {
+  display: grid;
+  gap: 4px;
+  min-width: 12rem;
+  max-width: 22rem;
+  flex: 1 1 12rem;
+}
+
+.wt-guided__op-edit-label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--wt-text);
+}
+
+.wt-guided__op-edit[data-required="true"] .wt-guided__op-edit-label em {
+  font-style: normal;
+  font-weight: 600;
+  color: var(--wt-warning-text, var(--wt-text-muted));
+}
+
+.wt-guided__op-edit-note {
+  font-size: 0.74rem;
+  line-height: 1.4;
+  color: var(--wt-text-muted);
+}
+
+.wt-guided__revalidating {
+  display: flex;
+  align-items: center;
+  gap: var(--wt-space-2);
+  margin: var(--wt-space-2) 0 0;
+  font-size: 0.8rem;
+  color: var(--wt-text-muted);
+}

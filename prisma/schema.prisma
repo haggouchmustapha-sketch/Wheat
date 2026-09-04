@@ -1,0 +1,1367 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Company {
+  id                       String                    @id @default(cuid())
+  name                     String
+  legalForm                String
+  ice                      String
+  taxId                    String
+  city                     String
+  baseCurrency             String                    @default("MAD")
+  vatFrequency             String                    @default("MONTHLY")
+  fiscalYears              FiscalYear[]
+  accounts                 Account[]
+  journals                 Journal[]
+  entries                  Entry[]
+  invoices                 Invoice[]
+  documents                Document[]
+  bankAccounts             BankAccount[]
+  employees                Employee[]
+  taxPeriods               TaxPeriod[]
+  activityLogs             ActivityLog[]
+  companyUsers             CompanyUser[]
+  payrollRuns              PayrollRun[]
+  counterparties           Counterparty[]
+  invoiceSequences         InvoiceSequence[]
+  payments                 Payment[]
+  bankReconciliations      BankReconciliation[]
+  ledgerImportBatches      LedgerImportBatch[]
+  bankImportProfiles       BankImportProfile[]
+  auditChain               AuditChain?
+  invoiceArtifacts         InvoiceArtifact[]
+  taxConfigurationVersions TaxConfigurationVersion[]
+  vatWorkpapers            VatWorkpaper[]
+  fiscalCloseRuns          FiscalCloseRun[]
+  journalPieceSequences    JournalPieceSequence[]
+  openingBalanceRuns       OpeningBalanceRun[]
+  fiscalPackages           FiscalPackage[]
+  reportConfigurations     ReportConfiguration[]
+  wheatAiSettings          WheatAiSettings?
+  wheatAiAuditEvents       WheatAiAuditEvent[]
+  wheatKnowledgePatterns   WheatKnowledgePattern[]
+  sageExportProfile        SageExportProfile?
+  guidedStepDecisions      GuidedStepDecision[]
+  formDrafts               FormDraft[]
+  version                  Int                       @default(1)
+  createdAt                DateTime                  @default(now())
+  updatedAt                DateTime                  @updatedAt
+
+  @@index([name])
+}
+
+model FiscalYear {
+  id               String                 @id @default(cuid())
+  companyId        String
+  label            String
+  startsOn         DateTime
+  endsOn           DateTime
+  lockedTo         DateTime?
+  status           String                 @default("OPEN")
+  closedAt         DateTime?
+  closedByUserId   String?
+  closeRunId       String?                @unique
+  reopenedAt       DateTime?
+  reopenedByUserId String?
+  reopenReason     String?
+  version          Int                    @default(1)
+  company          Company                @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  closedBy         User?                  @relation("FiscalYearClosedBy", fields: [closedByUserId], references: [id], onDelete: SetNull)
+  reopenedBy       User?                  @relation("FiscalYearReopenedBy", fields: [reopenedByUserId], references: [id], onDelete: SetNull)
+  closeRun         FiscalCloseRun?        @relation("FiscalYearActiveClose", fields: [closeRunId], references: [id], onDelete: SetNull)
+  closeRuns        FiscalCloseRun[]       @relation("FiscalYearCloseRuns")
+  pieceSequences   JournalPieceSequence[]
+  openingRuns      OpeningBalanceRun[]
+  fiscalPackages   FiscalPackage[]
+
+  @@index([companyId, startsOn, endsOn])
+}
+
+model User {
+  id                    String                    @id @default(cuid())
+  name                  String
+  email                 String                    @unique
+  role                  String
+  twoFactorOn           Boolean                   @default(false)
+  companyUsers          CompanyUser[]
+  activityLogs          ActivityLog[]
+  ledgerImportBatches   LedgerImportBatch[]       @relation("LedgerImportActor")
+  auditEvents           AuditEvent[]              @relation("AuditEventActor")
+  auditSeals            AuditSeal[]               @relation("AuditSealActor")
+  fiscalYearsClosed     FiscalYear[]              @relation("FiscalYearClosedBy")
+  fiscalYearsReopened   FiscalYear[]              @relation("FiscalYearReopenedBy")
+  invoiceArtifacts      InvoiceArtifact[]         @relation("InvoiceArtifactActor")
+  taxConfigurations     TaxConfigurationVersion[] @relation("TaxConfigurationActor")
+  vatWorkpapersReviewed VatWorkpaper[]            @relation("VatWorkpaperReviewer")
+  vatWorkpapersFiled    VatWorkpaper[]            @relation("VatWorkpaperFiler")
+  fiscalCloseRuns       FiscalCloseRun[]          @relation("FiscalCloseActor")
+  fiscalTablesReviewed  FiscalTableWorkpaper[]    @relation("FiscalTableReviewer")
+}
+
+model CompanyUser {
+  id        String  @id @default(cuid())
+  companyId String
+  userId    String
+  role      String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, userId])
+}
+
+model SageExportProfile {
+  id                    String   @id @default(cuid())
+  companyId             String   @unique
+  profileType           String
+  outputKind            String
+  encoding              String
+  includeHeader         Boolean  @default(false)
+  accountLength         String   @default("VARIABLE")
+  journalMappings       String   @default("{}")
+  accountMappings       String   @default("{}")
+  thirdPartyMappings    String   @default("{}")
+  requireJournalMapping Boolean  @default(true)
+  version               Int      @default(1)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  company               Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+}
+
+model Account {
+  id                       String               @id @default(cuid())
+  companyId                String
+  code                     String
+  label                    String
+  labelArabic              String?
+  parentCode               String?
+  classNo                  Int
+  type                     String
+  hierarchyDepth           Int                  @default(0)
+  isStandard               Boolean              @default(false)
+  active                   Boolean              @default(true)
+  category                 String               @default("CUSTOM")
+  reportNature             String?
+  auxiliaryEligible        Boolean              @default(false)
+  expectedBalance          String               @default("VARIABLE")
+  reportingMappingsJson    String               @default("{}")
+  fiscalMappingsJson       String               @default("{}")
+  effectiveFrom            DateTime?
+  effectiveTo              DateTime?
+  standardVersion          String?
+  postable                 Boolean              @default(true)
+  searchText               String               @default("")
+  version                  Int                  @default(1)
+  company                  Company              @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  lines                    EntryLine[]
+  bankAccounts             BankAccount[]        @relation("BankLedgerAccount")
+  receivableCounterparties Counterparty[]       @relation("CounterpartyReceivable")
+  payableCounterparties    Counterparty[]       @relation("CounterpartyPayable")
+  controlledInvoices       Invoice[]            @relation("InvoiceControl")
+  vatInvoices              Invoice[]            @relation("InvoiceVat")
+  invoiceLines             InvoiceLine[]
+  controlledPayments       Payment[]            @relation("PaymentControl")
+  settledPayments          Payment[]            @relation("PaymentSettlement")
+  taxRateDefinitions       TaxRateDefinition[]
+  openingBalanceLines      OpeningBalanceLine[]
+
+  @@unique([companyId, code])
+  @@index([companyId, active, classNo])
+  @@index([companyId, parentCode, active])
+  @@index([companyId, isStandard, postable])
+}
+
+model Journal {
+  id                       String                 @id @default(cuid())
+  companyId                String
+  code                     String
+  label                    String
+  nextNumber               Int                    @default(1)
+  piecePrefix              String?
+  piecePattern             String                 @default("{journal}-{year}-{sequence}")
+  pieceYearFormat          String                 @default("YYYY")
+  piecePadding             Int                    @default(6)
+  pieceSeparator           String                 @default("-")
+  allowManualPieceOverride Boolean                @default(false)
+  locked                   Boolean                @default(false)
+  active                   Boolean                @default(true)
+  version                  Int                    @default(1)
+  company                  Company                @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  entries                  Entry[]
+  pieceSequences           JournalPieceSequence[]
+
+  @@unique([companyId, code])
+  @@index([companyId, active])
+}
+
+model Entry {
+  id                  String            @id @default(cuid())
+  companyId           String
+  journalId           String
+  number              String
+  date                DateTime
+  pieceNumber         String
+  pieceNumberRaw      String?
+  pieceNumberSearch   String?
+  pieceSequenceNo     Int?
+  pieceFiscalYearId   String?
+  label               String
+  status              String            @default("DRAFT")
+  source              String            @default("MANUAL")
+  auditNote           String?
+  postedAt            DateTime?
+  reversedAt          DateTime?
+  reversalOfId        String?
+  journalCodeSnapshot String
+  version             Int               @default(1)
+  company             Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  journal             Journal           @relation(fields: [journalId], references: [id])
+  reversalOf          Entry?            @relation("EntryReversals", fields: [reversalOfId], references: [id], onDelete: Restrict)
+  reversals           Entry[]           @relation("EntryReversals")
+  postedPayrollRun    PayrollRun?       @relation("PayrollRunPosting")
+  voidedPayrollRun    PayrollRun?       @relation("PayrollRunVoid")
+  lines               EntryLine[]
+  documents           Document[]
+  postedInvoice       Invoice?          @relation("InvoicePosting")
+  voidedInvoice       Invoice?          @relation("InvoiceVoid")
+  postedPayment       Payment?          @relation("PaymentPosting")
+  voidedPayment       Payment?          @relation("PaymentVoid")
+  ledgerImportRows    LedgerImportRow[] @relation("LedgerImportDraft")
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  @@unique([companyId, number])
+  @@index([companyId, date, status])
+  @@index([journalId, date])
+  @@index([companyId, journalId, pieceNumber])
+  @@index([reversalOfId])
+}
+
+model JournalPieceSequence {
+  id           String     @id @default(cuid())
+  companyId    String
+  journalId    String
+  fiscalYearId String
+  nextNumber   Int        @default(1)
+  lastIssued   Int        @default(0)
+  version      Int        @default(1)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  company      Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  journal      Journal    @relation(fields: [journalId], references: [id], onDelete: Cascade)
+  fiscalYear   FiscalYear @relation(fields: [fiscalYearId], references: [id], onDelete: Cascade)
+
+  @@unique([journalId, fiscalYearId])
+  @@index([companyId, fiscalYearId])
+}
+
+model EntryLine {
+  id                            String                         @id @default(cuid())
+  entryId                       String
+  accountId                     String
+  label                         String
+  debitCents                    BigInt                         @default(0)
+  creditCents                   BigInt                         @default(0)
+  thirdParty                    String?
+  counterpartyId                String?
+  position                      Int
+  accountCodeSnapshot           String
+  accountLabelSnapshot          String
+  entry                         Entry                          @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  account                       Account                        @relation(fields: [accountId], references: [id])
+  counterparty                  Counterparty?                  @relation(fields: [counterpartyId], references: [id], onDelete: Restrict)
+  bankReconciliationAllocations BankReconciliationAllocation[]
+
+  @@unique([entryId, position])
+  @@index([counterpartyId])
+  @@index([accountId, entryId])
+}
+
+model Counterparty {
+  id                         String   @id @default(cuid())
+  companyId                  String
+  kind                       String
+  displayName                String
+  legalName                  String?
+  ice                        String?
+  taxId                      String?
+  email                      String?
+  phone                      String?
+  address                    String?
+  city                       String?
+  identityKey                String
+  defaultReceivableAccountId String?
+  defaultPayableAccountId    String?
+  paymentTermsDays           Int      @default(30)
+  active                     Boolean  @default(true)
+  version                    Int      @default(1)
+  createdAt                  DateTime @default(now())
+  updatedAt                  DateTime @updatedAt
+
+  company                  Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  defaultReceivableAccount Account?    @relation("CounterpartyReceivable", fields: [defaultReceivableAccountId], references: [id], onDelete: SetNull)
+  defaultPayableAccount    Account?    @relation("CounterpartyPayable", fields: [defaultPayableAccountId], references: [id], onDelete: SetNull)
+  invoices                 Invoice[]
+  payments                 Payment[]
+  entryLines               EntryLine[]
+
+  @@unique([companyId, identityKey])
+  @@index([companyId, displayName])
+  @@index([companyId, kind, active])
+}
+
+model InvoiceSequence {
+  id         String  @id @default(cuid())
+  companyId  String
+  series     String  @default("FA")
+  year       Int
+  nextNumber Int     @default(1)
+  padding    Int     @default(6)
+  company    Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, series, year])
+}
+
+model Invoice {
+  id                        String                   @id @default(cuid())
+  companyId                 String
+  kind                      String
+  counterparty              String
+  ice                       String?
+  invoiceNo                 String
+  invoiceDate               DateTime
+  dueDate                   DateTime?
+  paymentDate               DateTime?
+  htCents                   BigInt
+  vatCents                  BigInt
+  ttcCents                  BigInt
+  status                    String
+  paymentMethod             String?
+  counterpartyId            String?
+  numberKey                 String?
+  series                    String?
+  sequenceYear              Int?
+  sequenceNo                Int?
+  currency                  String                   @default("MAD")
+  counterpartyNameSnapshot  String?
+  iceSnapshot               String?
+  taxIdSnapshot             String?
+  billingAddressSnapshot    String?
+  lifecycleStatus           String                   @default("LEGACY")
+  legacyStatus              String?
+  source                    String                   @default("LEGACY_1_1")
+  notes                     String?
+  needsReview               Boolean                  @default(true)
+  reviewNote                String?
+  documentType              String                   @default("INVOICE")
+  creditedInvoiceId         String?
+  creditReason              String?
+  taxConfigurationVersionId String?
+  artifactRequired          Boolean                  @default(false)
+  controlAccountId          String?
+  vatAccountId              String?
+  postedEntryId             String?                  @unique
+  voidEntryId               String?                  @unique
+  postedAt                  DateTime?
+  voidedAt                  DateTime?
+  voidReason                String?
+  version                   Int                      @default(1)
+  createdAt                 DateTime                 @default(now())
+  updatedAt                 DateTime                 @updatedAt
+  company                   Company                  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  counterpartyModel         Counterparty?            @relation(fields: [counterpartyId], references: [id], onDelete: Restrict)
+  controlAccount            Account?                 @relation("InvoiceControl", fields: [controlAccountId], references: [id], onDelete: Restrict)
+  vatAccount                Account?                 @relation("InvoiceVat", fields: [vatAccountId], references: [id], onDelete: Restrict)
+  postedEntry               Entry?                   @relation("InvoicePosting", fields: [postedEntryId], references: [id], onDelete: Restrict)
+  voidEntry                 Entry?                   @relation("InvoiceVoid", fields: [voidEntryId], references: [id], onDelete: Restrict)
+  creditedInvoice           Invoice?                 @relation("InvoiceCreditNotes", fields: [creditedInvoiceId], references: [id], onDelete: Restrict)
+  creditNotes               Invoice[]                @relation("InvoiceCreditNotes")
+  taxConfigurationVersion   TaxConfigurationVersion? @relation(fields: [taxConfigurationVersionId], references: [id], onDelete: Restrict)
+  lines                     InvoiceLine[]
+  allocations               PaymentAllocation[]
+  documents                 Document[]
+  artifacts                 InvoiceArtifact[]
+  vatWorkpaperLines         VatWorkpaperLine[]
+
+  @@unique([companyId, numberKey])
+  @@index([companyId, kind, invoiceDate])
+  @@index([companyId, lifecycleStatus, dueDate])
+  @@index([counterpartyId, dueDate])
+  @@index([creditedInvoiceId, documentType])
+  @@index([taxConfigurationVersionId])
+}
+
+model InvoiceLine {
+  id                               String  @id @default(cuid())
+  invoiceId                        String
+  position                         Int
+  description                      String
+  accountId                        String?
+  quantityMilli                    BigInt?
+  unitPriceCents                   BigInt?
+  discountCents                    BigInt  @default(0)
+  vatRateBps                       Int?
+  creditedInvoiceLineId            String?
+  taxRateDefinitionId              String?
+  taxRateCodeSnapshot              String?
+  taxRateLabelSnapshot             String?
+  taxRateDirectionSnapshot         String?
+  taxConfigurationRevisionSnapshot Int?
+  htCents                          BigInt  @default(0)
+  vatCents                         BigInt  @default(0)
+  ttcCents                         BigInt  @default(0)
+  isLegacySummary                  Boolean @default(false)
+
+  invoice             Invoice            @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  account             Account?           @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  creditedInvoiceLine InvoiceLine?       @relation("InvoiceLineCredits", fields: [creditedInvoiceLineId], references: [id], onDelete: Restrict)
+  creditNoteLines     InvoiceLine[]      @relation("InvoiceLineCredits")
+  taxRateDefinition   TaxRateDefinition? @relation(fields: [taxRateDefinitionId], references: [id], onDelete: Restrict)
+  vatWorkpaperLines   VatWorkpaperLine[]
+
+  @@unique([invoiceId, position])
+  @@index([accountId])
+  @@index([creditedInvoiceLineId])
+  @@index([taxRateDefinitionId])
+}
+
+model Payment {
+  id                  String    @id @default(cuid())
+  companyId           String
+  counterpartyId      String
+  kind                String
+  paymentDate         DateTime
+  reference           String?
+  method              String
+  currency            String    @default("MAD")
+  amountCents         BigInt    @default(0)
+  lifecycleStatus     String    @default("DRAFT")
+  source              String    @default("MANUAL")
+  notes               String?
+  controlAccountId    String?
+  settlementAccountId String?
+  bankAccountId       String?
+  postedEntryId       String?   @unique
+  voidEntryId         String?   @unique
+  postedAt            DateTime?
+  voidedAt            DateTime?
+  voidReason          String?
+  version             Int       @default(1)
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  company           Company                             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  counterparty      Counterparty                        @relation(fields: [counterpartyId], references: [id], onDelete: Restrict)
+  controlAccount    Account?                            @relation("PaymentControl", fields: [controlAccountId], references: [id], onDelete: Restrict)
+  settlementAccount Account?                            @relation("PaymentSettlement", fields: [settlementAccountId], references: [id], onDelete: Restrict)
+  bankAccount       BankAccount?                        @relation(fields: [bankAccountId], references: [id], onDelete: SetNull)
+  postedEntry       Entry?                              @relation("PaymentPosting", fields: [postedEntryId], references: [id], onDelete: Restrict)
+  voidEntry         Entry?                              @relation("PaymentVoid", fields: [voidEntryId], references: [id], onDelete: Restrict)
+  allocations       PaymentAllocation[]
+  bankEvidence      BankReconciliationPaymentEvidence[]
+  documents         Document[]
+
+  @@index([companyId, lifecycleStatus, paymentDate])
+  @@index([counterpartyId, paymentDate])
+}
+
+model PaymentAllocation {
+  id                     String    @id @default(cuid())
+  paymentId              String
+  invoiceId              String
+  amountCents            BigInt
+  status                 String    @default("ACTIVE")
+  createdAt              DateTime  @default(now())
+  reversedAt             DateTime?
+  reversalReason         String?
+  reversalAccountingDate DateTime?
+
+  payment           Payment            @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  invoice           Invoice            @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  vatWorkpaperLines VatWorkpaperLine[]
+
+  @@index([paymentId, status])
+  @@index([invoiceId, status])
+}
+
+model Document {
+  id                    String                   @id @default(cuid())
+  companyId             String
+  entryId               String?
+  invoiceId             String?
+  paymentId             String?
+  title                 String
+  type                  String
+  fiscalYear            String
+  tags                  String
+  storedPath            String?
+  contentSha256         String?
+  mimeType              String?
+  byteSize              BigInt?
+  ocrText               String
+  extracted             String
+  status                String                   @default("TO_REVIEW")
+  company               Company                  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  entry                 Entry?                   @relation(fields: [entryId], references: [id])
+  invoice               Invoice?                 @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  payment               Payment?                 @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  vatFilingReceipts     VatWorkpaper[]           @relation("VatFilingReceipt")
+  vatWorkpaperEvidence  VatWorkpaperEvidence[]
+  vatAdjustmentEvidence VatWorkpaperAdjustment[]
+  fiscalTableEvidence   FiscalTableEvidence[]
+  createdAt             DateTime                 @default(now())
+
+  @@index([companyId, status, createdAt])
+  @@index([companyId, contentSha256])
+}
+
+model BankAccount {
+  id              String                @id @default(cuid())
+  companyId       String
+  bankName        String
+  iban            String
+  balanceCents    BigInt
+  currency        String                @default("MAD")
+  ledgerAccountId String?               @unique
+  balanceAsOf     DateTime?
+  balanceSource   String                @default("LEGACY_ESTIMATE")
+  active          Boolean               @default(true)
+  version         Int                   @default(1)
+  company         Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  ledgerAccount   Account?              @relation("BankLedgerAccount", fields: [ledgerAccountId], references: [id], onDelete: SetNull)
+  movements       BankMovement[]
+  statements      BankStatementImport[]
+  payments        Payment[]
+  importProfiles  BankImportProfile[]
+
+  @@index([companyId, active])
+}
+
+model BankStatementImport {
+  id                     String    @id @default(cuid())
+  bankAccountId          String
+  sourceName             String
+  sourceStoredPath       String?
+  sourceSha256           String
+  startsOn               DateTime?
+  endsOn                 DateTime?
+  openingBalanceCents    BigInt?
+  closingBalanceCents    BigInt?
+  rowCount               Int
+  sourceFormat           String    @default("UNKNOWN")
+  importedCount          Int       @default(0)
+  skippedCount           Int       @default(0)
+  errorCount             Int       @default(0)
+  duplicateCount         Int       @default(0)
+  // Frozen column default: SQLite cannot alter a default without rebuilding the
+  // table, and every write sets this explicitly to the current marker. Readers
+  // accept both spellings via legacyDomainValues.STORED_SCHEMA_VERSIONS.
+  canonicalSchemaVersion String    @default("ATLAS_BANK_1")
+  validationJson         String    @default("{}")
+  status                 String    @default("ACTIVE")
+  importedAt             DateTime  @default(now())
+  voidedAt               DateTime?
+  voidReason             String?
+
+  bankAccount BankAccount    @relation(fields: [bankAccountId], references: [id], onDelete: Restrict)
+  movements   BankMovement[]
+
+  @@unique([bankAccountId, sourceSha256])
+  @@index([bankAccountId, endsOn])
+}
+
+model BankMovement {
+  id                 String               @id @default(cuid())
+  bankAccountId      String
+  date               DateTime
+  label              String
+  amountCents        BigInt
+  reference          String
+  status             String
+  confidence         Int
+  statementId        String?
+  statementRow       Int?
+  valueDate          DateTime?
+  operationDateRaw   String?
+  valueDateRaw       String?
+  dateInferred       Boolean              @default(false)
+  rowClass           String               @default("TRANSACTION")
+  sourcePage         Int?
+  rawJson            String               @default("{}")
+  confidenceJson     String               @default("{}")
+  externalId         String?
+  fingerprint        String?
+  legacyMatchClaimed Boolean              @default(false)
+  legacyConfidence   Int?
+  revision           Int                  @default(0)
+  excludedAt         DateTime?
+  exclusionReason    String?
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+  bankAccount        BankAccount          @relation(fields: [bankAccountId], references: [id], onDelete: Restrict)
+  statement          BankStatementImport? @relation(fields: [statementId], references: [id], onDelete: Restrict)
+  reconciliations    BankReconciliation[]
+
+  @@unique([statementId, statementRow])
+  @@index([bankAccountId, date])
+  @@index([statementId, date])
+  @@index([bankAccountId, fingerprint])
+}
+
+model BankReconciliation {
+  id                String    @id @default(cuid())
+  companyId         String
+  bankMovementId    String
+  status            String    @default("ACTIVE")
+  note              String?
+  movementSnapshot  String
+  confirmedAt       DateTime  @default(now())
+  confirmedByUserId String?
+  voidedAt          DateTime?
+  voidedByUserId    String?
+  voidReason        String?
+
+  company         Company                             @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  movement        BankMovement                        @relation(fields: [bankMovementId], references: [id], onDelete: Restrict)
+  allocations     BankReconciliationAllocation[]
+  paymentEvidence BankReconciliationPaymentEvidence[]
+
+  @@index([bankMovementId, status, confirmedAt])
+  @@index([companyId, confirmedAt])
+}
+
+model BankReconciliationAllocation {
+  id               String @id @default(cuid())
+  reconciliationId String
+  entryLineId      String
+  amountCents      BigInt
+
+  reconciliation BankReconciliation @relation(fields: [reconciliationId], references: [id], onDelete: Restrict)
+  entryLine      EntryLine          @relation(fields: [entryLineId], references: [id], onDelete: Restrict)
+
+  @@unique([reconciliationId, entryLineId])
+  @@index([entryLineId])
+}
+
+model BankReconciliationPaymentEvidence {
+  id               String @id @default(cuid())
+  reconciliationId String
+  paymentId        String
+  amountCents      BigInt
+
+  reconciliation BankReconciliation @relation(fields: [reconciliationId], references: [id], onDelete: Restrict)
+  payment        Payment            @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+
+  @@unique([reconciliationId, paymentId])
+  @@index([paymentId])
+}
+
+model TaxPeriod {
+  id                 String   @id @default(cuid())
+  companyId          String
+  label              String
+  collectedVatCents  BigInt
+  deductibleVatCents BigInt
+  dueVatCents        BigInt
+  creditVatCents     BigInt
+  status             String
+  declarationDue     DateTime
+  company            Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+}
+
+model Employee {
+  id                String           @id @default(cuid())
+  companyId         String
+  fullName          String
+  cin               String
+  cnss              String
+  position          String
+  grossSalaryCents  BigInt
+  cnssEmployeeCents BigInt
+  amoEmployeeCents  BigInt
+  irCents           BigInt
+  netSalaryCents    BigInt
+  company           Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  payrollSnapshots  PayrollRunLine[]
+}
+
+model PayrollRun {
+  id            String           @id @default(cuid())
+  companyId     String
+  period        String
+  status        String           @default("DRAFT")
+  postedEntryId String?          @unique
+  voidEntryId   String?          @unique
+  createdAt     DateTime         @default(now())
+  postedAt      DateTime?
+  voidedAt      DateTime?
+  voidReason    String?
+  version       Int              @default(1)
+  company       Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  postedEntry   Entry?           @relation("PayrollRunPosting", fields: [postedEntryId], references: [id], onDelete: Restrict)
+  voidEntry     Entry?           @relation("PayrollRunVoid", fields: [voidEntryId], references: [id], onDelete: Restrict)
+  lines         PayrollRunLine[]
+
+  @@unique([companyId, period])
+  @@index([companyId, status, period])
+}
+
+model PayrollRunLine {
+  id                String     @id @default(cuid())
+  payrollRunId      String
+  employeeId        String?
+  employeeName      String
+  cin               String
+  cnss              String
+  position          String
+  grossSalaryCents  BigInt
+  cnssEmployeeCents BigInt
+  amoEmployeeCents  BigInt
+  irCents           BigInt
+  netSalaryCents    BigInt
+  payrollRun        PayrollRun @relation(fields: [payrollRunId], references: [id], onDelete: Cascade)
+  employee          Employee?  @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+
+  @@index([payrollRunId])
+  @@index([employeeId])
+}
+
+model LedgerImportBatch {
+  id                String            @id @default(cuid())
+  companyId         String
+  sourceName        String
+  sourceStoredPath  String?
+  sourceSha256      String
+  scopeSha256       String            @default("")
+  revision          Int               @default(1)
+  supersedesBatchId String?           @unique
+  mappingJson       String
+  status            String            @default("STAGED")
+  actorUserId       String?
+  importedAt        DateTime          @default(now())
+  voidedAt          DateTime?
+  voidReason        String?
+  company           Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  actor             User?             @relation("LedgerImportActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  rows              LedgerImportRow[]
+
+  @@unique([companyId, sourceSha256, scopeSha256, revision])
+  @@index([companyId, sourceSha256, scopeSha256])
+  @@index([companyId, status, importedAt])
+  @@index([actorUserId, importedAt])
+}
+
+model LedgerImportRow {
+  id               String            @id @default(cuid())
+  batchId          String
+  sourceRow        Int
+  rawJson          String
+  normalizedJson   String?
+  fingerprint      String
+  validationStatus String            @default("PENDING")
+  validationError  String?
+  draftEntryId     String?
+  batch            LedgerImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  draftEntry       Entry?            @relation("LedgerImportDraft", fields: [draftEntryId], references: [id], onDelete: SetNull)
+
+  @@unique([batchId, sourceRow])
+  @@index([draftEntryId])
+  @@index([batchId, fingerprint])
+  @@index([batchId, validationStatus])
+}
+
+model BankImportProfile {
+  id            String       @id @default(cuid())
+  companyId     String
+  bankAccountId String?
+  name          String
+  sourceFormat  String       @default("CSV")
+  mappingJson   String
+  active        Boolean      @default(true)
+  version       Int          @default(1)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  company       Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  bankAccount   BankAccount? @relation(fields: [bankAccountId], references: [id], onDelete: SetNull)
+
+  @@unique([companyId, name])
+  @@index([companyId, active])
+  @@index([bankAccountId, active])
+}
+
+/// Immutable invoice render. Services only append revisions; they never update
+/// or delete an artifact that has been handed to the user or audit workflow.
+model InvoiceArtifact {
+  id                   String           @id @default(cuid())
+  companyId            String
+  invoiceId            String
+  kind                 String           @default("IMMUTABLE_PDF")
+  revision             Int              @default(1)
+  supersedesArtifactId String?          @unique
+  pdfBytes             Bytes
+  storedPath           String?
+  mimeType             String           @default("application/pdf")
+  byteSize             BigInt
+  contentSha256        String
+  payloadJson          String
+  payloadSha256        String
+  createdByUserId      String?
+  createdAt            DateTime         @default(now())
+  immutable            Boolean          @default(true)
+  company              Company          @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  invoice              Invoice          @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  createdBy            User?            @relation("InvoiceArtifactActor", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  supersedesArtifact   InvoiceArtifact? @relation("InvoiceArtifactRevisions", fields: [supersedesArtifactId], references: [id], onDelete: Restrict)
+  supersedingArtifact  InvoiceArtifact? @relation("InvoiceArtifactRevisions")
+
+  @@unique([invoiceId, kind, revision])
+  @@index([companyId, createdAt])
+  @@index([contentSha256])
+  @@index([payloadSha256])
+}
+
+/// A configuration is a versioned rules snapshot, never a mutable global rate.
+/// Legacy invoices deliberately retain a null taxConfigurationVersionId.
+model TaxConfigurationVersion {
+  id              String              @id @default(cuid())
+  companyId       String
+  lineageKey      String
+  revision        Int                 @default(1)
+  status          String              @default("DRAFT")
+  name            String
+  accountingBasis String
+  filingFrequency String
+  effectiveFrom   DateTime
+  effectiveTo     DateTime?
+  sourceReference String?
+  payloadSha256   String
+  createdByUserId String?
+  createdAt       DateTime            @default(now())
+  activatedAt     DateTime?
+  retiredAt       DateTime?
+  version         Int                 @default(1)
+  company         Company             @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  createdBy       User?               @relation("TaxConfigurationActor", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  rates           TaxRateDefinition[]
+  invoices        Invoice[]
+  vatWorkpapers   VatWorkpaper[]
+
+  @@unique([companyId, lineageKey, revision])
+  @@index([companyId, status, effectiveFrom])
+  @@index([createdByUserId, createdAt])
+}
+
+model TaxRateDefinition {
+  id                        String                  @id @default(cuid())
+  taxConfigurationVersionId String
+  code                      String
+  label                     String
+  rateBps                   Int
+  direction                 String
+  accountId                 String?
+  deductibilityBps          Int                     @default(10000)
+  position                  Int
+  active                    Boolean                 @default(true)
+  taxConfigurationVersion   TaxConfigurationVersion @relation(fields: [taxConfigurationVersionId], references: [id], onDelete: Restrict)
+  account                   Account?                @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  invoiceLines              InvoiceLine[]
+
+  @@unique([taxConfigurationVersionId, code])
+  @@unique([taxConfigurationVersionId, position])
+  @@index([accountId])
+}
+
+/// A workpaper is a reproducible VAT evidence snapshot. A correction creates a
+/// successor revision; a filed workpaper is not edited in place.
+model VatWorkpaper {
+  id                        String                   @id @default(cuid())
+  companyId                 String
+  taxConfigurationVersionId String
+  lineageKey                String
+  revision                  Int                      @default(1)
+  supersedesWorkpaperId     String?                  @unique
+  periodStart               DateTime
+  periodEnd                 DateTime
+  status                    String                   @default("DRAFT")
+  basisSnapshot             String
+  frequencySnapshot         String
+  sourceSha256              String
+  evidenceSha256            String?
+  collectedVatCents         BigInt                   @default(0)
+  deductibleVatCents        BigInt                   @default(0)
+  adjustmentVatCents        BigInt                   @default(0)
+  netVatDueCents            BigInt                   @default(0)
+  creditCarryforwardCents   BigInt                   @default(0)
+  preparedAt                DateTime                 @default(now())
+  reviewedAt                DateTime?
+  reviewedByUserId          String?
+  filedAt                   DateTime?
+  filedByUserId             String?
+  filingReference           String?
+  filingReceiptDocumentId   String?
+  version                   Int                      @default(1)
+  createdAt                 DateTime                 @default(now())
+  updatedAt                 DateTime                 @updatedAt
+  company                   Company                  @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  taxConfigurationVersion   TaxConfigurationVersion  @relation(fields: [taxConfigurationVersionId], references: [id], onDelete: Restrict)
+  supersedesWorkpaper       VatWorkpaper?            @relation("VatWorkpaperRevisions", fields: [supersedesWorkpaperId], references: [id], onDelete: Restrict)
+  supersedingWorkpaper      VatWorkpaper?            @relation("VatWorkpaperRevisions")
+  reviewedBy                User?                    @relation("VatWorkpaperReviewer", fields: [reviewedByUserId], references: [id], onDelete: SetNull)
+  filedBy                   User?                    @relation("VatWorkpaperFiler", fields: [filedByUserId], references: [id], onDelete: SetNull)
+  filingReceiptDocument     Document?                @relation("VatFilingReceipt", fields: [filingReceiptDocumentId], references: [id], onDelete: Restrict)
+  lines                     VatWorkpaperLine[]
+  adjustments               VatWorkpaperAdjustment[]
+  evidence                  VatWorkpaperEvidence[]
+
+  @@unique([companyId, lineageKey, revision])
+  @@index([companyId, periodStart, periodEnd, status])
+  @@index([taxConfigurationVersionId])
+  @@index([reviewedByUserId, reviewedAt])
+  @@index([filedByUserId, filedAt])
+  @@index([filingReceiptDocumentId])
+}
+
+model VatWorkpaperLine {
+  id                   String             @id @default(cuid())
+  workpaperId          String
+  position             Int
+  eventKey             String
+  eventType            String
+  eventDate            DateTime
+  invoiceId            String?
+  invoiceLineId        String?
+  paymentAllocationId  String?
+  direction            String
+  taxRateCodeSnapshot  String
+  taxRateLabelSnapshot String
+  rateBps              Int
+  taxableCents         BigInt
+  vatCents             BigInt
+  grossCents           BigInt
+  eligibility          String             @default("INCLUDED")
+  snapshotJson         String
+  createdAt            DateTime           @default(now())
+  workpaper            VatWorkpaper       @relation(fields: [workpaperId], references: [id], onDelete: Restrict)
+  invoice              Invoice?           @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  invoiceLine          InvoiceLine?       @relation(fields: [invoiceLineId], references: [id], onDelete: Restrict)
+  paymentAllocation    PaymentAllocation? @relation(fields: [paymentAllocationId], references: [id], onDelete: Restrict)
+
+  @@unique([workpaperId, position])
+  @@unique([workpaperId, eventKey])
+  @@index([invoiceId])
+  @@index([invoiceLineId])
+  @@index([paymentAllocationId])
+}
+
+model VatWorkpaperAdjustment {
+  id                 String       @id @default(cuid())
+  workpaperId        String
+  position           Int
+  direction          String
+  taxableCents       BigInt       @default(0)
+  vatCents           BigInt
+  reason             String
+  evidenceDocumentId String?
+  snapshotJson       String
+  createdAt          DateTime     @default(now())
+  workpaper          VatWorkpaper @relation(fields: [workpaperId], references: [id], onDelete: Restrict)
+  evidenceDocument   Document?    @relation(fields: [evidenceDocumentId], references: [id], onDelete: Restrict)
+
+  @@unique([workpaperId, position])
+  @@index([evidenceDocumentId])
+}
+
+model VatWorkpaperEvidence {
+  id                    String       @id @default(cuid())
+  workpaperId           String
+  documentId            String
+  role                  String
+  contentSha256Snapshot String
+  byteSizeSnapshot      BigInt?
+  note                  String?
+  createdAt             DateTime     @default(now())
+  workpaper             VatWorkpaper @relation(fields: [workpaperId], references: [id], onDelete: Restrict)
+  document              Document     @relation(fields: [documentId], references: [id], onDelete: Restrict)
+
+  @@unique([workpaperId, documentId, role])
+  @@index([documentId])
+}
+
+model FiscalCloseRun {
+  id               String      @id @default(cuid())
+  companyId        String
+  fiscalYearId     String
+  sequence         Int
+  action           String
+  status           String      @default("DRAFT")
+  cutoffAt         DateTime
+  checksJson       String
+  checksSha256     String
+  reason           String?
+  actorUserId      String?
+  auditSealId      String?     @unique
+  createdAt        DateTime    @default(now())
+  completedAt      DateTime?
+  version          Int         @default(1)
+  company          Company     @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  fiscalYear       FiscalYear  @relation("FiscalYearCloseRuns", fields: [fiscalYearId], references: [id], onDelete: Restrict)
+  actor            User?       @relation("FiscalCloseActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  auditSeal        AuditSeal?  @relation("FiscalCloseSeal", fields: [auditSealId], references: [id], onDelete: Restrict)
+  closedFiscalYear FiscalYear? @relation("FiscalYearActiveClose")
+
+  @@unique([fiscalYearId, sequence])
+  @@index([companyId, status, createdAt])
+  @@index([actorUserId, createdAt])
+}
+
+model AuditChain {
+  id            String       @id @default(cuid())
+  companyId     String       @unique
+  algorithm     String       @default("SHA256")
+  lastSequence  BigInt       @default(0)
+  lastEventHash String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  company       Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  events        AuditEvent[]
+  seals         AuditSeal[]
+}
+
+model AuditEvent {
+  id                  String     @id @default(cuid())
+  chainId             String
+  sequence            BigInt
+  occurredAt          DateTime   @default(now())
+  actorUserId         String?
+  action              String
+  entityType          String
+  entityId            String?
+  payloadJson         String
+  previousHash        String?
+  eventHash           String?
+  integrityStatus     String     @default("CHAINED")
+  legacyActivityLogId String?    @unique
+  chain               AuditChain @relation(fields: [chainId], references: [id], onDelete: Cascade)
+  actor               User?      @relation("AuditEventActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@unique([chainId, sequence])
+  @@index([chainId, occurredAt])
+  @@index([chainId, entityType, entityId])
+  @@index([actorUserId, occurredAt])
+}
+
+model AuditSeal {
+  id                 String          @id @default(cuid())
+  chainId            String
+  fromSequence       BigInt
+  throughSequence    BigInt
+  eventCount         Int
+  rootHash           String
+  algorithm          String          @default("SHA256")
+  sealedAt           DateTime        @default(now())
+  actorUserId        String?
+  note               String?
+  purpose            String          @default("GENERAL")
+  payloadSha256      String?
+  verificationStatus String          @default("UNVERIFIED")
+  verifiedAt         DateTime?
+  verificationNote   String?
+  chain              AuditChain      @relation(fields: [chainId], references: [id], onDelete: Restrict)
+  actor              User?           @relation("AuditSealActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  fiscalCloseRun     FiscalCloseRun? @relation("FiscalCloseSeal")
+
+  @@unique([chainId, throughSequence])
+  @@index([chainId, sealedAt])
+  @@index([actorUserId, sealedAt])
+}
+
+model OpeningBalanceRun {
+  id                          String               @id @default(cuid())
+  companyId                   String
+  fiscalYearId                String
+  sourceFiscalYearId          String?
+  status                      String               @default("DRAFT")
+  sourceKind                  String               @default("PREVIOUS_CLOSE")
+  retainedEarningsAccountCode String?
+  differenceCents             BigInt               @default(0)
+  warningsJson                String               @default("[]")
+  postedEntryId               String?
+  createdByUserId             String?
+  validatedAt                 DateTime?
+  postedAt                    DateTime?
+  createdAt                   DateTime             @default(now())
+  updatedAt                   DateTime             @updatedAt
+  company                     Company              @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  fiscalYear                  FiscalYear           @relation(fields: [fiscalYearId], references: [id], onDelete: Cascade)
+  lines                       OpeningBalanceLine[]
+
+  @@index([companyId, fiscalYearId, status])
+}
+
+model OpeningBalanceLine {
+  id                   String            @id @default(cuid())
+  runId                String
+  accountId            String
+  accountCodeSnapshot  String
+  accountLabelSnapshot String
+  debitCents           BigInt            @default(0)
+  creditCents          BigInt            @default(0)
+  sourceBalanceCents   BigInt            @default(0)
+  carryForward         Boolean           @default(true)
+  warning              String?
+  position             Int
+  run                  OpeningBalanceRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  account              Account           @relation(fields: [accountId], references: [id], onDelete: Restrict)
+
+  @@unique([runId, position])
+  @@index([accountId])
+}
+
+model ReportConfiguration {
+  id                 String   @id @default(cuid())
+  companyId          String
+  reportType         String
+  variant            String
+  templateVersion    String
+  mappingVersion     String
+  mappingJson        String   @default("{}")
+  verificationStatus String   @default("UNVERIFIED")
+  sourceCitation     String?
+  active             Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  company            Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, reportType, variant, templateVersion])
+  @@index([companyId, reportType, active])
+}
+
+model FiscalPackage {
+  id                    String                 @id @default(cuid())
+  companyId             String
+  fiscalYearId          String
+  regime                String
+  templateVersion       String
+  schemaVersion         String
+  status                String                 @default("DRAFT")
+  accountingProfitCents BigInt                 @default(0)
+  taxableProfitCents    BigInt                 @default(0)
+  validationJson        String                 @default("[]")
+  sourceJson            String                 @default("{}")
+  generatedAt           DateTime?
+  lockedAt              DateTime?
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+  company               Company                @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  fiscalYear            FiscalYear             @relation(fields: [fiscalYearId], references: [id], onDelete: Cascade)
+  adjustments           FiscalAdjustment[]
+  tables                FiscalTableWorkpaper[]
+
+  @@unique([companyId, fiscalYearId, regime, templateVersion])
+  @@index([companyId, fiscalYearId, status])
+}
+
+model FiscalTableWorkpaper {
+  id                  String                @id @default(cuid())
+  fiscalPackageId     String
+  tableId             String
+  templateVersion     String
+  status              String                @default("DRAFT")
+  computedJson        String                @default("{}")
+  manualJson          String                @default("[]")
+  validationJson      String                @default("[]")
+  sourceHash          String?
+  sourceSummaryJson   String                @default("{}")
+  notApplicableReason String?
+  reviewedAt          DateTime?
+  reviewedByUserId    String?
+  revision            Int                   @default(1)
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+  fiscalPackage       FiscalPackage         @relation(fields: [fiscalPackageId], references: [id], onDelete: Cascade)
+  reviewedBy          User?                 @relation("FiscalTableReviewer", fields: [reviewedByUserId], references: [id], onDelete: SetNull)
+  evidence            FiscalTableEvidence[]
+
+  @@unique([fiscalPackageId, tableId])
+  @@index([fiscalPackageId, status])
+  @@index([reviewedByUserId, reviewedAt])
+}
+
+model FiscalTableEvidence {
+  id                    String               @id @default(cuid())
+  workpaperId           String
+  documentId            String
+  role                  String               @default("SUPPORT")
+  note                  String?
+  documentTitleSnapshot String
+  contentSha256Snapshot String
+  attachedAt            DateTime             @default(now())
+  workpaper             FiscalTableWorkpaper @relation(fields: [workpaperId], references: [id], onDelete: Cascade)
+  document              Document             @relation(fields: [documentId], references: [id], onDelete: Restrict)
+
+  @@unique([workpaperId, documentId, role])
+  @@index([documentId])
+}
+
+model FiscalAdjustment {
+  id              String        @id @default(cuid())
+  fiscalPackageId String
+  kind            String
+  label           String
+  amountCents     BigInt
+  legalReference  String?
+  evidenceJson    String        @default("[]")
+  verified        Boolean       @default(false)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  fiscalPackage   FiscalPackage @relation(fields: [fiscalPackageId], references: [id], onDelete: Cascade)
+
+  @@index([fiscalPackageId, kind])
+}
+
+model WheatAiSettings {
+  id                   String    @id @default(cuid())
+  companyId            String    @unique
+  enabled              Boolean   @default(false)
+  permissionMode       String    @default("ASSISTANT")
+  selectedTier         String?
+  selectedModelId      String?
+  modelManifestVersion String?
+  runtimeVersion       String?
+  hardwareProfileJson  String    @default("{}")
+  benchmarkJson        String    @default("{}")
+  lastHealthCheckAt    DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+  company              Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+}
+
+model WheatAiAuditEvent {
+  id                String   @id @default(cuid())
+  companyId         String
+  actorUserId       String?
+  sessionId         String
+  toolName          String
+  permissionMode    String
+  requestJson       String
+  resultSummaryJson String
+  confirmationJson  String?
+  status            String
+  durationMs        Int?
+  createdAt         DateTime @default(now())
+  company           Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, createdAt])
+  @@index([sessionId, createdAt])
+}
+
+model WheatKnowledgePattern {
+  id            String   @id @default(cuid())
+  companyId     String
+  kind          String
+  key           String
+  valueJson     String
+  evidenceJson  String   @default("[]")
+  confidenceBps Int      @default(0)
+  active        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, kind, key])
+  @@index([companyId, kind, active])
+}
+
+model ActivityLog {
+  id          String   @id @default(cuid())
+  companyId   String
+  userId      String?
+  action      String
+  entity      String
+  description String
+  entityId    String?
+  detailsJson String?
+  createdAt   DateTime @default(now())
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user        User?    @relation(fields: [userId], references: [id])
+
+  @@index([companyId, createdAt])
+}
+
+/// A human decision about a guided-work step that the ledger cannot show.
+///
+/// Guided work derives *what is done* from the dossier's own records, never
+/// from a stored checklist — that is what keeps it honest when a backup is
+/// restored or a draft deleted. Two things are not derivable, and only those
+/// live here: that somebody deliberately postponed a step, and that somebody
+/// declared it does not apply to this dossier. Everything a step actually did
+/// is written by the domain service that did it, and audited there.
+model GuidedStepDecision {
+  id          String   @id @default(cuid())
+  companyId   String
+  stepId      String
+  decision    String
+  note        String?
+  actorUserId String?
+  decidedAt   DateTime @default(now())
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, stepId])
+  @@index([companyId, decidedAt])
+}
+
+/// Work a person has started and not yet submitted.
+///
+/// Not accounting data, and deliberately not stored as any. A half-typed
+/// invoice is not an Invoice: writing one into the ledger tables to keep it
+/// safe would put a record in the books that nobody has decided on, which is
+/// worse than losing it. What lives here is the contents of a form, kept
+/// verbatim until the person submits it, replaces it, or throws it away.
+///
+/// Scoped by company, so a draft begun in one dossier cannot surface in
+/// another, and cascaded on company deletion so it leaves with the dossier it
+/// belongs to. `draftKey` separates concurrent unfinished items within one
+/// entity — an unfinished purchase invoice and an unfinished sale invoice are
+/// two drafts, not one that overwrites the other.
+///
+/// `baseVersion` and `revision` exist for the case where the underlying record
+/// moved on while the draft sat: an edit draft carries the version of the
+/// record it was started from, so a stale draft can be recognised and shown to
+/// the person rather than silently written over newer data.
+model FormDraft {
+  id          String   @id @default(cuid())
+  companyId   String
+  /// Form family: "invoice", "entry", "payment", "counterparty", "document_extraction".
+  entity      String
+  /// Identity within the family: "new" for a fresh form, else the record id.
+  draftKey    String
+  /// The form's own state, as JSON. Never read by the accounting services.
+  payload     String
+  /// Version of the underlying record when an edit draft was started.
+  baseVersion Int?
+  revision    Int      @default(1)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, entity, draftKey])
+  @@index([companyId, updatedAt])
+}
+
+model LocalAppSecurity {
+  id             String    @id @default("local")
+  enabled        Boolean   @default(false)
+  pinSalt        String?
+  pinHash        String?
+  pinKeyLength   Int       @default(64)
+  idleMinutes    Int       @default(15)
+  lockOnStartup  Boolean   @default(false)
+  failedAttempts Int       @default(0)
+  lockedUntil    DateTime?
+  updatedAt      DateTime  @default(now()) @updatedAt
+}

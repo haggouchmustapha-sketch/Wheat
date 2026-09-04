@@ -1,0 +1,669 @@
+{
+ "engine": "PaddleOCR PP-OCR",
+ "engineVersion": "3.7.0",
+ "confidence": 97,
+ "pageCount": 1,
+ "text": "SLgill\nAttijariwafa bank\nRELEVE DE COMPTE BANCAIRE\nLAHGAGCHA NEGOCE\n: AGENCE BENGUERIR\nAGENCE\n201 RUE MUSTAPHA EL MAANI ETG\n00 0814N000000291 21210\nBUR 19 C/0 OFFICE 201 BUSINESS\nCOMPTE:\n:\n20000 CASABLANCA\nDEVISE : DIRHAM\nMOROCCO\nRELEVE D'IDENTITE BANCAIRE\n007 201 00 08145000000291 05\nNOUS AVONS L'HONNEUR DE VOUS REMETTRE CI-DESSOUS LE RELEVE DE VOTRE COMPTE\nPAGE\n2/2\nCODE\nVALEUR\nDATE\nLIBELLE\n.DEBIT...\nCAPITAUX\nCREDIT\n0016CP\n25\n06\nVIREMENT RECU DE 2 BRIGADE D INFAN26 06 2026\n18 334,42\n0016MI\n25 06\nPAIEMENT\nCB 23/06/26 CMH I BENGUER22\n06\n2026\n600,00\n0016M129 06\nPAIEMENT CB..26/06/26 ELECTROPLANET\n25 06 2026\n8.998.,00\n0016CP30\n06\nVIREMENT RECU DE FONDS COMPENSATION01 07 2026\n23 400,00\n08141330 06\nVIR AG EMIS VERS ETTAOUSSI\n30 06 2026\n10 000,00\nTOTAL MOUVEMENTS\n142 180,48\n157 320,02\nSOLDE\nFINAL AU 30 06 2026\n150 289,29\nCREDITEUR\nAttijariwafa bank société anonyme au capital de 2 151 408 390 DH - Siège social : 2, boulevard Moulay Youssef, Casablanca.\nAgréée en qualité d'établissement de crédit par arrêté du ministre des finances\nLiWaiA",
+ "words": [
+  {
+   "text": "SLgill",
+   "confidence": 60,
+   "page": 1,
+   "bbox": {
+    "x0": 272,
+    "y0": 176,
+    "x1": 546,
+    "y1": 226
+   }
+  },
+  {
+   "text": "Attijariwafa bank",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 273,
+    "y0": 221,
+    "x1": 547,
+    "y1": 268
+   }
+  },
+  {
+   "text": "RELEVE DE COMPTE BANCAIRE",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 851,
+    "y0": 402,
+    "x1": 1328,
+    "y1": 434
+   }
+  },
+  {
+   "text": "LAHGAGCHA NEGOCE",
+   "confidence": 98,
+   "page": 1,
+   "bbox": {
+    "x0": 845,
+    "y0": 464,
+    "x1": 1126,
+    "y1": 491
+   }
+  },
+  {
+   "text": ": AGENCE BENGUERIR",
+   "confidence": 97,
+   "page": 1,
+   "bbox": {
+    "x0": 55,
+    "y0": 483,
+    "x1": 415,
+    "y1": 527
+   }
+  },
+  {
+   "text": "AGENCE",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 37,
+    "y0": 512,
+    "x1": 144,
+    "y1": 539
+   }
+  },
+  {
+   "text": "201 RUE MUSTAPHA EL MAANI ETG",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 842,
+    "y0": 518,
+    "x1": 1280,
+    "y1": 546
+   }
+  },
+  {
+   "text": "00 0814N000000291 21210",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 149,
+    "y0": 554,
+    "x1": 441,
+    "y1": 582
+   }
+  },
+  {
+   "text": "BUR 19 C/0 OFFICE 201 BUSINESS",
+   "confidence": 98,
+   "page": 1,
+   "bbox": {
+    "x0": 842,
+    "y0": 547,
+    "x1": 1248,
+    "y1": 573
+   }
+  },
+  {
+   "text": "COMPTE:",
+   "confidence": 97,
+   "page": 1,
+   "bbox": {
+    "x0": 39,
+    "y0": 564,
+    "x1": 147,
+    "y1": 590
+   }
+  },
+  {
+   "text": ":",
+   "confidence": 96,
+   "page": 1,
+   "bbox": {
+    "x0": 139,
+    "y0": 569,
+    "x1": 148,
+    "y1": 581
+   }
+  },
+  {
+   "text": "20000 CASABLANCA",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 844,
+    "y0": 575,
+    "x1": 1085,
+    "y1": 598
+   }
+  },
+  {
+   "text": "DEVISE : DIRHAM",
+   "confidence": 98,
+   "page": 1,
+   "bbox": {
+    "x0": 32,
+    "y0": 609,
+    "x1": 262,
+    "y1": 642
+   }
+  },
+  {
+   "text": "MOROCCO",
+   "confidence": 99,
+   "page": 1,
+   "bbox": {
+    "x0": 842,
+    "y0": 600,
+    "x1": 979,
+    "y1": 624
+   }
+  },
+  {
+   "text": "RELEVE D'IDENTITE BANCAIRE",
+   "confidence": 97,
+   "page": 1,
+   "bbox": {
+    "x0": 904,
+    "y0": 657,
+    "x1": 1192,
+    "y1": 676
+   }
+  },
+  {
+   "text": "007 201 00 08145000000291 05",
+   "confidence": 98,
+   "page": 1,
+   "bbox": {
+    "x0": 870,
+    "y0": 682,
+    "x1": 1196,
+    "y1": 709
+   }
+  },
+  {
+   "text": "NOUS AVONS L'HONNEUR DE VOUS REMETTRE CI-DESSOUS LE RELEVE DE VOTRE COMPTE",
+   "confidence": 98,
+   "page": 1,
+   "bbox": {
+    "x0": 386,
+    "y0": 772,
+    "x1": 1382,
+    "y1": 797
+   }
+  },
+  {
+   "text": "PAGE",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 1172,
+    "y0": 802,
+    "x1": 1225,
+    "y1": 824
+   }
+  },
+  {
+   "text": "2/2",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 1278,
+    "y0": 799,
+    "x1": 1324,
+    "y1": 825
+   }
+  },
+  {
+   "text": "CODE",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 65,
+    "y0": 908,
+    "x1": 117,
+    "y1": 933
+   }
+  },
+  {
+   "text": "VALEUR",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 704,
+    "y0": 909,
+    "x1": 802,
+    "y1": 940
+   }
+  },
+  {
+   "text": "DATE",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 142,
+    "y0": 919,
+    "x1": 195,
+    "y1": 943
+   }
+  },
+  {
+   "text": "LIBELLE",
+   "confidence": 99,
+   "page": 1,
+   "bbox": {
+    "x0": 394,
+    "y0": 917,
+    "x1": 492,
+    "y1": 945
+   }
+  },
+  {
+   "text": ".DEBIT...",
+   "confidence": 77,
+   "page": 1,
+   "bbox": {
+    "x0": 833,
+    "y0": 925,
+    "x1": 964,
+    "y1": 956
+   }
+  },
+  {
+   "text": "CAPITAUX",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 1003,
+    "y0": 926,
+    "x1": 1132,
+    "y1": 956
+   }
+  },
+  {
+   "text": "CREDIT",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 1209,
+    "y0": 931,
+    "x1": 1301,
+    "y1": 954
+   }
+  },
+  {
+   "text": "0016CP",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 50,
+    "y0": 955,
+    "x1": 137,
+    "y1": 979
+   }
+  },
+  {
+   "text": "25",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 130,
+    "y0": 956,
+    "x1": 169,
+    "y1": 979
+   }
+  },
+  {
+   "text": "06",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 165,
+    "y0": 958,
+    "x1": 206,
+    "y1": 979
+   }
+  },
+  {
+   "text": "VIREMENT RECU DE 2 BRIGADE D INFAN26 06 2026",
+   "confidence": 98,
+   "page": 1,
+   "bbox": {
+    "x0": 214,
+    "y0": 956,
+    "x1": 816,
+    "y1": 983
+   }
+  },
+  {
+   "text": "18 334,42",
+   "confidence": 99,
+   "page": 1,
+   "bbox": {
+    "x0": 1203,
+    "y0": 960,
+    "x1": 1333,
+    "y1": 989
+   }
+  },
+  {
+   "text": "0016MI",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 49,
+    "y0": 982,
+    "x1": 136,
+    "y1": 1006
+   }
+  },
+  {
+   "text": "25 06",
+   "confidence": 98,
+   "page": 1,
+   "bbox": {
+    "x0": 129,
+    "y0": 982,
+    "x1": 207,
+    "y1": 1007
+   }
+  },
+  {
+   "text": "PAIEMENT",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 216,
+    "y0": 984,
+    "x1": 333,
+    "y1": 1007
+   }
+  },
+  {
+   "text": "CB 23/06/26 CMH I BENGUER22",
+   "confidence": 99,
+   "page": 1,
+   "bbox": {
+    "x0": 323,
+    "y0": 984,
+    "x1": 715,
+    "y1": 1009
+   }
+  },
+  {
+   "text": "06",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 712,
+    "y0": 989,
+    "x1": 753,
+    "y1": 1009
+   }
+  },
+  {
+   "text": "2026",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 753,
+    "y0": 988,
+    "x1": 817,
+    "y1": 1011
+   }
+  },
+  {
+   "text": "600,00",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 988,
+    "y0": 987,
+    "x1": 1076,
+    "y1": 1015
+   }
+  },
+  {
+   "text": "0016M129 06",
+   "confidence": 95,
+   "page": 1,
+   "bbox": {
+    "x0": 45,
+    "y0": 1007,
+    "x1": 211,
+    "y1": 1036
+   }
+  },
+  {
+   "text": "PAIEMENT CB..26/06/26 ELECTROPLANET",
+   "confidence": 99,
+   "page": 1,
+   "bbox": {
+    "x0": 215,
+    "y0": 1011,
+    "x1": 675,
+    "y1": 1038
+   }
+  },
+  {
+   "text": "25 06 2026",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 675,
+    "y0": 1015,
+    "x1": 817,
+    "y1": 1038
+   }
+  },
+  {
+   "text": "8.998.,00",
+   "confidence": 97,
+   "page": 1,
+   "bbox": {
+    "x0": 960,
+    "y0": 1017,
+    "x1": 1075,
+    "y1": 1040
+   }
+  },
+  {
+   "text": "0016CP30",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 49,
+    "y0": 1036,
+    "x1": 169,
+    "y1": 1062
+   }
+  },
+  {
+   "text": "06",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 157,
+    "y0": 1035,
+    "x1": 210,
+    "y1": 1063
+   }
+  },
+  {
+   "text": "VIREMENT RECU DE FONDS COMPENSATION01 07 2026",
+   "confidence": 97,
+   "page": 1,
+   "bbox": {
+    "x0": 214,
+    "y0": 1038,
+    "x1": 817,
+    "y1": 1065
+   }
+  },
+  {
+   "text": "23 400,00",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 1204,
+    "y0": 1042,
+    "x1": 1332,
+    "y1": 1073
+   }
+  },
+  {
+   "text": "08141330 06",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 50,
+    "y0": 1062,
+    "x1": 212,
+    "y1": 1089
+   }
+  },
+  {
+   "text": "VIR AG EMIS VERS ETTAOUSSI",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 214,
+    "y0": 1065,
+    "x1": 567,
+    "y1": 1090
+   }
+  },
+  {
+   "text": "30 06 2026",
+   "confidence": 95,
+   "page": 1,
+   "bbox": {
+    "x0": 678,
+    "y0": 1066,
+    "x1": 817,
+    "y1": 1094
+   }
+  },
+  {
+   "text": "10 000,00",
+   "confidence": 95,
+   "page": 1,
+   "bbox": {
+    "x0": 948,
+    "y0": 1067,
+    "x1": 1074,
+    "y1": 1096
+   }
+  },
+  {
+   "text": "TOTAL MOUVEMENTS",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 351,
+    "y0": 1122,
+    "x1": 567,
+    "y1": 1144
+   }
+  },
+  {
+   "text": "142 180,48",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 934,
+    "y0": 1123,
+    "x1": 1075,
+    "y1": 1152
+   }
+  },
+  {
+   "text": "157 320,02",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 1190,
+    "y0": 1128,
+    "x1": 1332,
+    "y1": 1155
+   }
+  },
+  {
+   "text": "SOLDE",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 355,
+    "y0": 1689,
+    "x1": 426,
+    "y1": 1709
+   }
+  },
+  {
+   "text": "FINAL AU 30 06 2026",
+   "confidence": 99,
+   "page": 1,
+   "bbox": {
+    "x0": 439,
+    "y0": 1687,
+    "x1": 725,
+    "y1": 1717
+   }
+  },
+  {
+   "text": "150 289,29",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 870,
+    "y0": 1694,
+    "x1": 1007,
+    "y1": 1720
+   }
+  },
+  {
+   "text": "CREDITEUR",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 1025,
+    "y0": 1696,
+    "x1": 1151,
+    "y1": 1723
+   }
+  },
+  {
+   "text": "Attijariwafa bank société anonyme au capital de 2 151 408 390 DH - Siège social : 2, boulevard Moulay Youssef, Casablanca.",
+   "confidence": 99,
+   "page": 1,
+   "bbox": {
+    "x0": 225,
+    "y0": 1876,
+    "x1": 1136,
+    "y1": 1922
+   }
+  },
+  {
+   "text": "Agréée en qualité d'établissement de crédit par arrêté du ministre des finances",
+   "confidence": 99,
+   "page": 1,
+   "bbox": {
+    "x0": 431,
+    "y0": 1905,
+    "x1": 994,
+    "y1": 1938
+   }
+  },
+  {
+   "text": "LiWaiA",
+   "confidence": 35,
+   "page": 1,
+   "bbox": {
+    "x0": 1133,
+    "y0": 1832,
+    "x1": 1234,
+    "y1": 1918
+   }
+  }
+ ]
+}

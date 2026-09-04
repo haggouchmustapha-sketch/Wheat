@@ -1,0 +1,790 @@
+{
+ "engine": "PaddleOCR PP-OCR",
+ "engineVersion": "3.7.0",
+ "confidence": 90,
+ "pageCount": 1,
+ "text": "-\n-\n-\nar a\nMembre de\nPCA\nINGENIERIE FINANCIÈRE CONSEIL JURIDIQUE & FISCALE\n4.C.XO.+.HOE A\nOrganisabion Prole\nucnnls des Comptiblas. Agrb\nMARIS HOLDING\nFACTURE : 34/2026\nICE :001864713000017\nDate\n: 22/07/2026\nIntitulé:\nDésignation\nTotal HT\nHonoraires relatifs aux formalités administratives de transfert\nde siège social.\nRadiation de la TP\n5 000,00\nDEMANDE DE CERTIFICATS DE PROPRIETES\nDEBOURS A L IDENTIQUE\n300,00\nENREGISTREMENT PV\n2 555,00\nENREGISTREMENT STATUTS\n505,00\nENREGISTREMENT DE BAIL\n625,00\nCERTIFICATS DE PROPRIETES\n505,00\nATTESTATION DE RNSEM\n600,00\nDEPOT LEGAL+RC MODIF\n100,00\nMODELE J\n100,00\nJAL\n20,00\n100,00\nDEBOURS\nTotal HT\n2 555,00\nT.V.A 20%\n5 300,00\nTotal TTC\n1 060,00\n8 915,00\nARRETE LA PRESENTE FACTURE A LA SOMME DE :\nHUIT MILLE NEUF CENT QUINZE DHS\nCentre\nBd.\n44\n8\no\nC\n0\nC\n9\nBd Mohammed\nVI,Imm.\nél.: +212 5 22 44 94 56 - E-mail: ifcof@hotmail.com - Site Internet: www.ifcof.com\nG2\nappt.\n7, Complexe\nERAC,\nCasablanca\n20250\nCE: 000187958000077 - RC: 193109 - TP: 32690363 - IF: 1110375 - CNSS: 7976361",
+ "words": [
+  {
+   "text": "-",
+   "confidence": 59,
+   "page": 1,
+   "bbox": {
+    "x0": 353,
+    "y0": 62,
+    "x1": 359,
+    "y1": 67
+   }
+  },
+  {
+   "text": "-",
+   "confidence": 59,
+   "page": 1,
+   "bbox": {
+    "x0": 357,
+    "y0": 62,
+    "x1": 363,
+    "y1": 67
+   }
+  },
+  {
+   "text": "-",
+   "confidence": 47,
+   "page": 1,
+   "bbox": {
+    "x0": 361,
+    "y0": 62,
+    "x1": 367,
+    "y1": 67
+   }
+  },
+  {
+   "text": "ar a",
+   "confidence": 25,
+   "page": 1,
+   "bbox": {
+    "x0": 1014,
+    "y0": 58,
+    "x1": 1184,
+    "y1": 91
+   }
+  },
+  {
+   "text": "Membre de",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 1066,
+    "y0": 81,
+    "x1": 1143,
+    "y1": 107
+   }
+  },
+  {
+   "text": "PCA",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 1058,
+    "y0": 115,
+    "x1": 1184,
+    "y1": 164
+   }
+  },
+  {
+   "text": "INGENIERIE FINANCIÈRE CONSEIL JURIDIQUE & FISCALE",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 69,
+    "y0": 160,
+    "x1": 469,
+    "y1": 199
+   }
+  },
+  {
+   "text": "4.C.XO.+.HOE A",
+   "confidence": 56,
+   "page": 1,
+   "bbox": {
+    "x0": 1026,
+    "y0": 168,
+    "x1": 1182,
+    "y1": 192
+   }
+  },
+  {
+   "text": "Organisabion Prole",
+   "confidence": 94,
+   "page": 1,
+   "bbox": {
+    "x0": 1029,
+    "y0": 185,
+    "x1": 1087,
+    "y1": 195
+   }
+  },
+  {
+   "text": "ucnnls des Comptiblas. Agrb",
+   "confidence": 72,
+   "page": 1,
+   "bbox": {
+    "x0": 1087,
+    "y0": 185,
+    "x1": 1179,
+    "y1": 199
+   }
+  },
+  {
+   "text": "MARIS HOLDING",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 556,
+    "y0": 228,
+    "x1": 738,
+    "y1": 266
+   }
+  },
+  {
+   "text": "FACTURE : 34/2026",
+   "confidence": 99,
+   "page": 1,
+   "bbox": {
+    "x0": 187,
+    "y0": 326,
+    "x1": 430,
+    "y1": 368
+   }
+  },
+  {
+   "text": "ICE :001864713000017",
+   "confidence": 99,
+   "page": 1,
+   "bbox": {
+    "x0": 546,
+    "y0": 339,
+    "x1": 781,
+    "y1": 378
+   }
+  },
+  {
+   "text": "Date",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 185,
+    "y0": 354,
+    "x1": 247,
+    "y1": 387
+   }
+  },
+  {
+   "text": ": 22/07/2026",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 305,
+    "y0": 361,
+    "x1": 446,
+    "y1": 396
+   }
+  },
+  {
+   "text": "Intitulé:",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 168,
+    "y0": 465,
+    "x1": 248,
+    "y1": 495
+   }
+  },
+  {
+   "text": "Désignation",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 438,
+    "y0": 548,
+    "x1": 554,
+    "y1": 582
+   }
+  },
+  {
+   "text": "Total HT",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 865,
+    "y0": 568,
+    "x1": 957,
+    "y1": 603
+   }
+  },
+  {
+   "text": "Honoraires relatifs aux formalités administratives de transfert",
+   "confidence": 99,
+   "page": 1,
+   "bbox": {
+    "x0": 163,
+    "y0": 579,
+    "x1": 724,
+    "y1": 634
+   }
+  },
+  {
+   "text": "de siège social.",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 162,
+    "y0": 612,
+    "x1": 314,
+    "y1": 648
+   }
+  },
+  {
+   "text": "Radiation de la TP",
+   "confidence": 99,
+   "page": 1,
+   "bbox": {
+    "x0": 161,
+    "y0": 646,
+    "x1": 341,
+    "y1": 683
+   }
+  },
+  {
+   "text": "5 000,00",
+   "confidence": 99,
+   "page": 1,
+   "bbox": {
+    "x0": 882,
+    "y0": 649,
+    "x1": 970,
+    "y1": 683
+   }
+  },
+  {
+   "text": "DEMANDE DE CERTIFICATS DE PROPRIETES",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 158,
+    "y0": 684,
+    "x1": 599,
+    "y1": 731
+   }
+  },
+  {
+   "text": "DEBOURS A L IDENTIQUE",
+   "confidence": 98,
+   "page": 1,
+   "bbox": {
+    "x0": 157,
+    "y0": 717,
+    "x1": 411,
+    "y1": 755
+   }
+  },
+  {
+   "text": "300,00",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 895,
+    "y0": 719,
+    "x1": 967,
+    "y1": 753
+   }
+  },
+  {
+   "text": "ENREGISTREMENT PV",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 156,
+    "y0": 750,
+    "x1": 379,
+    "y1": 785
+   }
+  },
+  {
+   "text": "2 555,00",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 865,
+    "y0": 752,
+    "x1": 962,
+    "y1": 785
+   }
+  },
+  {
+   "text": "ENREGISTREMENT STATUTS",
+   "confidence": 98,
+   "page": 1,
+   "bbox": {
+    "x0": 155,
+    "y0": 779,
+    "x1": 442,
+    "y1": 818
+   }
+  },
+  {
+   "text": "505,00",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 882,
+    "y0": 785,
+    "x1": 961,
+    "y1": 819
+   }
+  },
+  {
+   "text": "ENREGISTREMENT DE BAIL",
+   "confidence": 98,
+   "page": 1,
+   "bbox": {
+    "x0": 153,
+    "y0": 814,
+    "x1": 423,
+    "y1": 851
+   }
+  },
+  {
+   "text": "625,00",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 881,
+    "y0": 815,
+    "x1": 959,
+    "y1": 848
+   }
+  },
+  {
+   "text": "CERTIFICATS DE PROPRIETES",
+   "confidence": 98,
+   "page": 1,
+   "bbox": {
+    "x0": 150,
+    "y0": 848,
+    "x1": 451,
+    "y1": 888
+   }
+  },
+  {
+   "text": "505,00",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 879,
+    "y0": 848,
+    "x1": 957,
+    "y1": 882
+   }
+  },
+  {
+   "text": "ATTESTATION DE RNSEM",
+   "confidence": 99,
+   "page": 1,
+   "bbox": {
+    "x0": 147,
+    "y0": 882,
+    "x1": 401,
+    "y1": 920
+   }
+  },
+  {
+   "text": "600,00",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 877,
+    "y0": 882,
+    "x1": 954,
+    "y1": 917
+   }
+  },
+  {
+   "text": "DEPOT LEGAL+RC MODIF",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 146,
+    "y0": 912,
+    "x1": 400,
+    "y1": 950
+   }
+  },
+  {
+   "text": "100,00",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 876,
+    "y0": 917,
+    "x1": 953,
+    "y1": 951
+   }
+  },
+  {
+   "text": "MODELE J",
+   "confidence": 99,
+   "page": 1,
+   "bbox": {
+    "x0": 143,
+    "y0": 941,
+    "x1": 251,
+    "y1": 970
+   }
+  },
+  {
+   "text": "100,00",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 876,
+    "y0": 949,
+    "x1": 951,
+    "y1": 978
+   }
+  },
+  {
+   "text": "JAL",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 141,
+    "y0": 971,
+    "x1": 183,
+    "y1": 999
+   }
+  },
+  {
+   "text": "20,00",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 882,
+    "y0": 977,
+    "x1": 951,
+    "y1": 1009
+   }
+  },
+  {
+   "text": "100,00",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 871,
+    "y0": 1005,
+    "x1": 949,
+    "y1": 1039
+   }
+  },
+  {
+   "text": "DEBOURS",
+   "confidence": 95,
+   "page": 1,
+   "bbox": {
+    "x0": 135,
+    "y0": 1087,
+    "x1": 242,
+    "y1": 1117
+   }
+  },
+  {
+   "text": "Total HT",
+   "confidence": 99,
+   "page": 1,
+   "bbox": {
+    "x0": 132,
+    "y0": 1116,
+    "x1": 221,
+    "y1": 1146
+   }
+  },
+  {
+   "text": "2 555,00",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 844,
+    "y0": 1122,
+    "x1": 941,
+    "y1": 1155
+   }
+  },
+  {
+   "text": "T.V.A 20%",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 130,
+    "y0": 1144,
+    "x1": 235,
+    "y1": 1174
+   }
+  },
+  {
+   "text": "5 300,00",
+   "confidence": 98,
+   "page": 1,
+   "bbox": {
+    "x0": 842,
+    "y0": 1150,
+    "x1": 941,
+    "y1": 1184
+   }
+  },
+  {
+   "text": "Total TTC",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 129,
+    "y0": 1173,
+    "x1": 232,
+    "y1": 1204
+   }
+  },
+  {
+   "text": "1 060,00",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 843,
+    "y0": 1179,
+    "x1": 938,
+    "y1": 1213
+   }
+  },
+  {
+   "text": "8 915,00",
+   "confidence": 98,
+   "page": 1,
+   "bbox": {
+    "x0": 840,
+    "y0": 1209,
+    "x1": 936,
+    "y1": 1241
+   }
+  },
+  {
+   "text": "ARRETE LA PRESENTE FACTURE A LA SOMME DE :",
+   "confidence": 99,
+   "page": 1,
+   "bbox": {
+    "x0": 127,
+    "y0": 1232,
+    "x1": 633,
+    "y1": 1281
+   }
+  },
+  {
+   "text": "HUIT MILLE NEUF CENT QUINZE DHS",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 125,
+    "y0": 1261,
+    "x1": 491,
+    "y1": 1303
+   }
+  },
+  {
+   "text": "Centre",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 319,
+    "y0": 1305,
+    "x1": 364,
+    "y1": 1358
+   }
+  },
+  {
+   "text": "Bd.",
+   "confidence": 99,
+   "page": 1,
+   "bbox": {
+    "x0": 312,
+    "y0": 1373,
+    "x1": 341,
+    "y1": 1404
+   }
+  },
+  {
+   "text": "44",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 332,
+    "y0": 1419,
+    "x1": 356,
+    "y1": 1444
+   }
+  },
+  {
+   "text": "8",
+   "confidence": 13,
+   "page": 1,
+   "bbox": {
+    "x0": 276,
+    "y0": 1457,
+    "x1": 285,
+    "y1": 1466
+   }
+  },
+  {
+   "text": "o",
+   "confidence": 32,
+   "page": 1,
+   "bbox": {
+    "x0": 292,
+    "y0": 1468,
+    "x1": 302,
+    "y1": 1476
+   }
+  },
+  {
+   "text": "C",
+   "confidence": 17,
+   "page": 1,
+   "bbox": {
+    "x0": 276,
+    "y0": 1487,
+    "x1": 286,
+    "y1": 1495
+   }
+  },
+  {
+   "text": "0",
+   "confidence": 24,
+   "page": 1,
+   "bbox": {
+    "x0": 211,
+    "y0": 1507,
+    "x1": 222,
+    "y1": 1517
+   }
+  },
+  {
+   "text": "C",
+   "confidence": 47,
+   "page": 1,
+   "bbox": {
+    "x0": 288,
+    "y0": 1501,
+    "x1": 302,
+    "y1": 1514
+   }
+  },
+  {
+   "text": "9",
+   "confidence": 98,
+   "page": 1,
+   "bbox": {
+    "x0": 22,
+    "y0": 1541,
+    "x1": 31,
+    "y1": 1553
+   }
+  },
+  {
+   "text": "Bd Mohammed",
+   "confidence": 98,
+   "page": 1,
+   "bbox": {
+    "x0": 47,
+    "y0": 1537,
+    "x1": 223,
+    "y1": 1568
+   }
+  },
+  {
+   "text": "VI,Imm.",
+   "confidence": 99,
+   "page": 1,
+   "bbox": {
+    "x0": 212,
+    "y0": 1543,
+    "x1": 332,
+    "y1": 1573
+   }
+  },
+  {
+   "text": "él.: +212 5 22 44 94 56 - E-mail: ifcof@hotmail.com - Site Internet: www.ifcof.com",
+   "confidence": 98,
+   "page": 1,
+   "bbox": {
+    "x0": 15,
+    "y0": 1561,
+    "x1": 907,
+    "y1": 1622
+   }
+  },
+  {
+   "text": "G2",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 344,
+    "y0": 1552,
+    "x1": 381,
+    "y1": 1572
+   }
+  },
+  {
+   "text": "appt.",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 391,
+    "y0": 1554,
+    "x1": 455,
+    "y1": 1576
+   }
+  },
+  {
+   "text": "7, Complexe",
+   "confidence": 97,
+   "page": 1,
+   "bbox": {
+    "x0": 456,
+    "y0": 1552,
+    "x1": 608,
+    "y1": 1583
+   }
+  },
+  {
+   "text": "ERAC,",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 614,
+    "y0": 1557,
+    "x1": 684,
+    "y1": 1585
+   }
+  },
+  {
+   "text": "Casablanca",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 695,
+    "y0": 1562,
+    "x1": 821,
+    "y1": 1590
+   }
+  },
+  {
+   "text": "20250",
+   "confidence": 100,
+   "page": 1,
+   "bbox": {
+    "x0": 827,
+    "y0": 1564,
+    "x1": 907,
+    "y1": 1593
+   }
+  },
+  {
+   "text": "CE: 000187958000077 - RC: 193109 - TP: 32690363 - IF: 1110375 - CNSS: 7976361",
+   "confidence": 99,
+   "page": 1,
+   "bbox": {
+    "x0": 15,
+    "y0": 1587,
+    "x1": 904,
+    "y1": 1648
+   }
+  }
+ ]
+}

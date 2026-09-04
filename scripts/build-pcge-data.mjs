@@ -1,0 +1,137 @@
+import fs from "node:fs";
+import path from "node:path";
+
+const TRANSCRIPTION_URL = "https://www.plancomptable.ma/";
+const OFFICIAL_SOURCE_URL = "https://www.finances.gov.ma/Publication/depp/2010/7004_recettes_priv_annee25_11_210.pdf";
+const OFFICIAL_SOURCE_SHA256 = "e42e7bfa4791abb4962cb78abf8396ded84878b3f0bcc3946a8a2e549095faa6";
+const EXPECTED_CLASS_COUNTS = { 0: 119, 1: 76, 2: 147, 3: 125, 4: 68, 5: 33, 6: 252, 7: 152, 8: 26, 9: 136 };
+
+const ROOT_LABELS = {
+  "0": "Comptes spéciaux",
+  "1": "Comptes de financement permanent",
+  "2": "Comptes d'actif immobilisé",
+  "3": "Comptes d'actif circulant hors trésorerie",
+  "4": "Comptes de passif circulant hors trésorerie",
+  "5": "Comptes de trésorerie",
+  "6": "Comptes de charges",
+  "7": "Comptes de produits",
+  "8": "Comptes de résultats",
+  "9": "Comptes de produits et charges réfléchis",
+};
+
+function decodeHtml(value) {
+  const named = {
+    amp: "&", apos: "'", quot: '"', nbsp: " ", rsquo: "'", lsquo: "'",
+    ldquo: '"', rdquo: '"', ndash: "-", mdash: "-", hellip: "…", laquo: "«", raquo: "»",
+  };
+  return value
+    .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCodePoint(Number.parseInt(code, 16)))
+    .replace(/&([a-z]+);/gi, (match, name) => named[name.toLowerCase()] ?? match)
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function accountType(code) {
+  const first = code[0];
+  if (first === "2" || first === "3" || code.startsWith("51")) return "ASSET";
+  if (first === "4" || code.startsWith("14") || code.startsWith("15") || code.startsWith("16") || code.startsWith("17") || code.startsWith("55")) return "LIABILITY";
+  if (code.startsWith("11") || code.startsWith("13")) return "EQUITY";
+  if (first === "6") return "EXPENSE";
+  if (first === "7") return "REVENUE";
+  return "MEMO";
+}
+
+function expectedBalance(code, type) {
+  if (type === "ASSET" && !code.startsWith("28") && !code.startsWith("29") && !code.startsWith("39") && !code.startsWith("59")) return "DEBIT";
+  if (type === "EXPENSE") return "DEBIT";
+  if (["LIABILITY", "EQUITY", "REVENUE"].includes(type) || code.startsWith("28") || code.startsWith("29") || code.startsWith("39") || code.startsWith("59")) return "CREDIT";
+  return "VARIABLE";
+}
+
+function category(code, type) {
+  if (code[0] === "0") return "SPECIAL";
+  if (code[0] === "8") return "RESULT";
+  if (code[0] === "9") return "ANALYTICAL";
+  return type;
+}
+
+function accentless(value) {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+
+const response = await fetch(TRANSCRIPTION_URL, { headers: { "user-agent": "Wheat-PCGE-Pinner/2.1.0" } });
+if (!response.ok) throw new Error(`PCGE transcription download failed: HTTP ${response.status}`);
+const html = await response.text();
+const rows = new Map(Object.entries(ROOT_LABELS));
+for (const match of html.matchAll(/<li[^>]*>([\s\S]*?)<\/li>/gi)) {
+  const text = decodeHtml(match[1].replace(/<[^>]+>/g, " "));
+  const parsed = /^(\d{1,5})[.\s]+(.+)$/.exec(text);
+  if (!parsed) continue;
+  const [, code, label] = parsed;
+  if (rows.has(code) && rows.get(code) !== label) throw new Error(`Conflicting PCGE label for ${code}.`);
+  rows.set(code, label);
+}
+
+const codes = [...rows.keys()];
+const parentByCode = new Map(codes.map((code) => [
+  code,
+  [...codes]
+    .filter((candidate) => candidate.length < code.length && code.startsWith(candidate))
+    .sort((left, right) => right.length - left.length)[0] ?? null,
+]));
+function hierarchyDepth(code) {
+  let depth = 0;
+  let parent = parentByCode.get(code);
+  while (parent) {
+    depth += 1;
+    parent = parentByCode.get(parent);
+  }
+  return depth;
+}
+const records = [...rows.entries()]
+  .sort(([left], [right]) => left.localeCompare(right, "fr", { numeric: true }))
+  .map(([code, label]) => {
+    const parentCode = parentByCode.get(code) ?? null;
+    const type = accountType(code);
+    const hasChild = codes.some((candidate) => candidate.length > code.length && candidate.startsWith(code));
+    return {
+      code,
+      label,
+      parentCode,
+      classNo: Number(code[0]),
+      depth: hierarchyDepth(code),
+      type,
+      category: category(code, type),
+      expectedBalance: expectedBalance(code, type),
+      auxiliaryEligible: code.startsWith("34") || code.startsWith("44"),
+      postable: code.length >= 3 && !hasChild,
+      searchText: accentless(`${code} ${label}`),
+    };
+  });
+
+const counts = Object.fromEntries(Object.keys(ROOT_LABELS).map((classNo) => [classNo, records.filter((row) => String(row.classNo) === classNo).length]));
+if (JSON.stringify(counts) !== JSON.stringify(EXPECTED_CLASS_COUNTS)) {
+  throw new Error(`Unexpected PCGE class counts: ${JSON.stringify(counts)}`);
+}
+for (const code of ["0", "011", "1", "1111", "3421", "4411", "5141", "6111", "7111", "8100", "9", "9031", "9910"]) {
+  if (!rows.has(code)) throw new Error(`Required PCGE account ${code} is missing.`);
+}
+
+const body = `// Generated by scripts/build-pcge-data.mjs. Do not edit account rows manually.\n` +
+`export const PCGE_SOURCE = ${JSON.stringify({
+  authority: "Royaume du Maroc - Conseil National de la Comptabilité",
+  title: "Code Général de la Normalisation Comptable, Tome II - Cadre comptable et plan de comptes",
+  officialUrl: OFFICIAL_SOURCE_URL,
+  officialSha256: OFFICIAL_SOURCE_SHA256,
+  transcriptionAidUrl: TRANSCRIPTION_URL,
+  version: "CGNC-1992",
+  verifiedPdfPages: "Tome II, plan de comptes modèles normal et simplifié",
+}, null, 2)} as const;\n\n` +
+`export type PcgeAccountDefinition = {\n  code: string;\n  label: string;\n  parentCode: string | null;\n  classNo: number;\n  depth: number;\n  type: \"ASSET\" | \"LIABILITY\" | \"EQUITY\" | \"EXPENSE\" | \"REVENUE\" | \"MEMO\";\n  category: string;\n  expectedBalance: \"DEBIT\" | \"CREDIT\" | \"VARIABLE\";\n  auxiliaryEligible: boolean;\n  postable: boolean;\n  searchText: string;\n};\n\n` +
+`export const PCGE_ACCOUNTS: readonly PcgeAccountDefinition[] = ${JSON.stringify(records, null, 2)};\n` +
+`export const PCGE_CLASS_COUNTS = ${JSON.stringify(counts, null, 2)} as const;\n`;
+
+const target = path.resolve("electron", "pcgeData.ts");
+fs.writeFileSync(target, body, "utf8");
+console.log(`Pinned ${records.length} PCGE hierarchy rows to ${target}.`);

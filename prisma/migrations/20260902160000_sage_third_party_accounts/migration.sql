@@ -1,0 +1,13 @@
+-- Sage's "N° compte tiers" is an account number in the target Sage dossier, not
+-- a name. Wheat used to send the counterparty's legal name into it, which Sage
+-- refuses (17 characters) and which would have been wrong even if it fitted.
+--
+-- The correct value is a code that only the target dossier knows, so it is
+-- stored beside the other Sage code correspondences rather than invented: a map
+-- from counterparty id to the third-party account that already exists in Sage.
+-- Keyed by id, because two spellings of a name are not the same tiers.
+--
+-- Empty for every existing profile: no dossier gains a third-party account it
+-- did not already have, and lines whose party is unmapped simply export with an
+-- empty optional field and a review point naming the party.
+ALTER TABLE "SageExportProfile" ADD COLUMN "thirdPartyMappings" TEXT NOT NULL DEFAULT '{}';

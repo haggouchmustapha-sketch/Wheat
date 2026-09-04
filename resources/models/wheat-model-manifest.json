@@ -1,0 +1,63 @@
+{
+  "schemaVersion": "WHEAT_LOCAL_MODELS_1",
+  "manifestVersion": "2026-08-25.1",
+  "runtime": {
+    "id": "llama.cpp-win-cpu-x64",
+    "version": "b10516",
+    "fileName": "llama-b10516-bin-win-cpu-x64.zip",
+    "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10516/llama-b10516-bin-win-cpu-x64.zip",
+    "sha256": "fbbbc55e0eb2e1b07f9dcb9488616c98ed47d9003b90e15e7c8c7812c4307cd3",
+    "bytes": 18506923,
+    "source": "https://github.com/ggml-org/llama.cpp/releases/tag/b10516",
+    "license": "MIT"
+  },
+  "models": [
+    {
+      "tier": "LITE",
+      "id": "qwen3-1.7b-q8-0",
+      "displayName": "Qwen3 1.7B · Lite",
+      "fileName": "Qwen3-1.7B-Q8_0.gguf",
+      "url": "https://huggingface.co/Qwen/Qwen3-1.7B-GGUF/resolve/90862c4b9d2787eaed51d12237eafdfe7c5f6077/Qwen3-1.7B-Q8_0.gguf?download=true",
+      "sha256": "061b54daade076b5d3362dac252678d17da8c68f07560be70818cace6590cb1a",
+      "bytes": 1834426016,
+      "source": "https://huggingface.co/Qwen/Qwen3-1.7B-GGUF/tree/90862c4b9d2787eaed51d12237eafdfe7c5f6077",
+      "baseModel": "Qwen/Qwen3-1.7B",
+      "quantization": "Q8_0",
+      "license": "Apache-2.0",
+      "minimumRamBytes": 8589934592,
+      "recommendedFreeRamBytes": 4294967296
+    },
+    {
+      "tier": "STANDARD",
+      "id": "qwen3-4b-instruct-2507-q4-k-m",
+      "displayName": "Qwen3 4B Instruct 2507 · Standard",
+      "fileName": "Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
+      "url": "https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/a06e946bb6b655725eafa393f4a9745d460374c9/Qwen3-4B-Instruct-2507-Q4_K_M.gguf?download=true",
+      "sha256": "3605803b982cb64aead44f6c1b2ae36e3acdb41d8e46c8a94c6533bc4c67e597",
+      "bytes": 2497281120,
+      "source": "https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/tree/a06e946bb6b655725eafa393f4a9745d460374c9",
+      "baseModel": "Qwen/Qwen3-4B-Instruct-2507",
+      "quantization": "Q4_K_M",
+      "license": "Apache-2.0",
+      "conversionProvenance": "Unsloth GGUF conversion of the official Qwen base model; artifact hash pinned.",
+      "minimumRamBytes": 17179869184,
+      "recommendedFreeRamBytes": 8589934592
+    },
+    {
+      "tier": "ADVANCED",
+      "id": "qwen3-8b-q4-k-m",
+      "displayName": "Qwen3 8B · Advanced",
+      "fileName": "Qwen3-8B-Q4_K_M.gguf",
+      "url": "https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/7c41481f57cb95916b40956ab2f0b139b296d974/Qwen3-8B-Q4_K_M.gguf?download=true",
+      "sha256": "d98cdcbd03e17ce47681435b5150e34c1417f50b5c0019dd560e4882c5745785",
+      "bytes": 5027783488,
+      "source": "https://huggingface.co/Qwen/Qwen3-8B-GGUF/tree/7c41481f57cb95916b40956ab2f0b139b296d974",
+      "baseModel": "Qwen/Qwen3-8B",
+      "quantization": "Q4_K_M",
+      "license": "Apache-2.0",
+      "minimumRamBytes": 34359738368,
+      "recommendedFreeRamBytes": 17179869184,
+      "recommendedGpuVramBytes": 8589934592
+    }
+  ]
+}

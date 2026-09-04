@@ -117,6 +117,40 @@ async function createAccountingFixture() {
   return { company, bankLedgerAccount, journal, entry, line: entry.lines[0], bankAccount, movement };
 }
 
+/** One more posted line on the fixture's bank ledger account. Returns the line. */
+async function addBankEntry(fixture, { suffix, date, pieceNumber, label, creditCents }) {
+  const id = `${fixture.company.id}-${suffix}`;
+  const entry = await prisma.entry.create({
+    data: {
+      id: `entry-${id}`,
+      companyId: fixture.company.id,
+      journalId: fixture.journal.id,
+      journalCodeSnapshot: fixture.journal.code,
+      number: `BQ-${id}`,
+      date: new Date(date),
+      pieceNumber,
+      label,
+      status: "POSTED",
+      source: "TEST",
+      postedAt: new Date(date),
+      lines: {
+        create: [{
+          id: `line-${id}`,
+          accountId: fixture.bankLedgerAccount.id,
+          position: 1,
+          accountCodeSnapshot: fixture.bankLedgerAccount.code,
+          accountLabelSnapshot: fixture.bankLedgerAccount.label,
+          label,
+          debitCents: 0n,
+          creditCents,
+        }],
+      },
+    },
+    include: { lines: true },
+  });
+  return entry.lines[0];
+}
+
 test.beforeAll(async () => {
   reconciliation = tsxRequire(modulePath, __filename);
   temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "atlas-reconciliation-unit-"));
@@ -243,6 +277,53 @@ test("confirms partial allocations, enforces revision and caps, and preserves im
   expect(await prisma.bankReconciliation.count({ where: { bankMovementId: fixture.movement.id } })).toBe(2);
   expect(await prisma.bankReconciliationAllocation.count({ where: { reconciliation: { bankMovementId: fixture.movement.id } } })).toBe(2);
   expect(await prisma.bankReconciliation.count({ where: { bankMovementId: fixture.movement.id, status: "VOIDED" } })).toBe(2);
+});
+
+test("explains every suggestion with the facts its score is made of", async () => {
+  const fixture = await createAccountingFixture();
+  const service = reconciliation.createReconciliationService(prisma);
+
+  // A second line on the same bank account: right direction, more than enough
+  // to cover the movement, five days later, and no shared reference.
+  const near = await addBankEntry(fixture, {
+    suffix: "near",
+    date: "2026-08-06T00:00:00.000Z",
+    pieceNumber: "AUTRE-1",
+    label: "Autre sortie",
+    creditCents: 25_000n,
+  });
+  // A third: too small to cover it, two months away, nothing in common.
+  const far = await addBankEntry(fixture, {
+    suffix: "far",
+    date: "2026-10-01T00:00:00.000Z",
+    pieceNumber: "AUTRE-2",
+    label: "Sortie lointaine",
+    creditCents: 5_000n,
+  });
+
+  const { entryLines } = await service.candidates({ movementId: fixture.movement.id });
+  const byId = new Map(entryLines.map((line) => [line.id, line]));
+
+  const exact = byId.get(fixture.line.id);
+  expect(exact.score).toBe(100);
+  expect(exact.matchReasons).toEqual(["AMOUNT_EXACT", "DATE_SAME_DAY", "REFERENCE_MATCH"]);
+
+  const covering = byId.get(near.id);
+  expect(covering.matchReasons).toEqual(["AMOUNT_COVERS", "DATE_WITHIN_10_DAYS"]);
+  expect(covering.score).toBe(30);
+
+  // Nothing matched, so nothing is claimed. A suggestion with no evidence
+  // behind it must say so rather than borrow a reason from a better one.
+  const unrelated = byId.get(far.id);
+  expect(unrelated.matchReasons).toEqual([]);
+  expect(unrelated.score).toBe(0);
+
+  // The reasons are the score: best-explained first, and never contradictory.
+  expect(entryLines.map((line) => line.id)).toEqual([fixture.line.id, near.id, far.id]);
+  for (const line of entryLines) {
+    expect(line.matchReasons.length > 0).toBe(line.score > 0);
+    expect(line.matchReasons).toEqual([...new Set(line.matchReasons)]);
+  }
 });
 
 test("rejects wrong signs, other-company lines, drafts, and rolls back revision claims", async () => {

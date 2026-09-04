@@ -189,3 +189,69 @@ test("a heading is moved onto its figures only when exactly one column can carry
   expect(sound.headers).toEqual(["DATE", "LIBELLE", "DEBIT", "CREDIT"]);
   expect(sound.warnings).toEqual([]);
 });
+
+/*
+ * How the page was read, said out loud.
+ *
+ * The pipeline has always recorded this — how much of the page it could place,
+ * how cleanly rows reconstructed, whether it identified the columns, and which
+ * rows a model had to help with. None of it reached the import dialog, so the
+ * assisted reading Wheat promises for scanned statements was invisible at the
+ * exact moment somebody was deciding whether to trust the figures.
+ */
+test("the reading reports what it was good at, per dimension rather than as one average", () => {
+  test.skip(Boolean(skipReason), skipReason);
+  const dimensions = parsed.ocr.confidenceDimensions;
+  expect(dimensions, "the pipeline reports no confidence dimensions").toBeTruthy();
+  for (const key of ["layout", "rowReconstruction", "fieldMapping"]) {
+    expect(typeof dimensions[key], key).toBe("number");
+    expect(dimensions[key], key).toBeGreaterThanOrEqual(0);
+    expect(dimensions[key], key).toBeLessThanOrEqual(100);
+  }
+  // This statement's columns are identified, which is the dimension a single
+  // average hides: a page can read cleanly and still be unusable.
+  expect(dimensions.fieldMapping).toBe(100);
+  expect(typeof parsed.ocr.fallbackRecommended).toBe("boolean");
+});
+
+test("a statement the local reader finishes on its own is never sent to a model", () => {
+  test.skip(Boolean(skipReason), skipReason);
+  // No reviewer was supplied to `parseBankStatement`, and none was needed: the
+  // local path produced five complete movements. The assisted pass is a
+  // fallback, so an empty list here is the ordinary, correct outcome.
+  expect(parsed.ocr.assistedRows).toEqual([]);
+
+  // And the rows are complete in the sense the fallback tests for, so even
+  // with a model available nothing would have been asked.
+  const incomplete = parsed.canonicalRows
+    .filter((row) => row.rowClass === "TRANSACTION")
+    .filter((row) => !row.operationDate || (!row.debit && !row.credit));
+  expect(incomplete).toEqual([]);
+});
+
+/*
+ * The other half of the same defect: the pipeline emitted this provenance and
+ * the import dialog read none of it. Pinned by reading the screen's source,
+ * because the values only exist on a real scan and the rule being protected is
+ * simply that the screen consumes them at all.
+ */
+test("the import dialog shows how the scan was read, and which rows were assisted", () => {
+  const app = fs.readFileSync(path.join(root, "src", "App.tsx"), "utf8");
+  const modal = app.slice(app.indexOf("function BankStatementImportModal"));
+  expect(modal.length).toBeGreaterThan(1_000);
+
+  // The assisted rows are read, marked in the preview, and named to the person.
+  expect(modal).toContain("draft.parsed.ocr?.assistedRows");
+  expect(modal).toContain("wt-row--assisted");
+  expect(modal).toMatch(/Lignes complétées par la relecture assistée/);
+
+  // Per-dimension confidence, not one average.
+  expect(modal).toContain("confidenceDimensions");
+  for (const dimension of ["layout", "rowReconstruction", "fieldMapping"]) {
+    expect(modal, dimension).toContain(`confidenceDimensions.${dimension}`);
+  }
+  expect(modal).toContain("fallbackRecommended");
+
+  // A provider or model identifier must never appear in the accounting UI.
+  expect(modal).not.toMatch(/openrouter|groq|ollama|modelId|providerId/i);
+});

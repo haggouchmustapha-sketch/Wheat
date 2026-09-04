@@ -18,6 +18,7 @@ import {
   Calendar,
   ChevronLeft,
   CheckCircle2,
+  LoaderCircle,
   ChevronRight,
   Command,
   Copy,
@@ -113,6 +114,7 @@ import { issuesOfSeverity } from "./lib/wheatIssues";
 import { resetAccessibleDialogState, useAccessibleDialog } from "./lib/useAccessibleDialog";
 import { useViewportAnchor } from "./lib/useViewportAnchor";
 import { useWheatReview } from "./lib/useWheatReview";
+import { ocrCheckIssues } from "./lib/ocrCheckIssues";
 import { flushAllFormDrafts, useDraftedForm } from "./lib/useFormDraft";
 import { DossierSetupGate } from "./components/DossierSetupGate";
 import { useGuidedJourney } from "./lib/useGuidedJourney";
@@ -182,7 +184,32 @@ type BankImportDraft = {
     warnings: string[];
     currency: string | null;
     rowCount: number;
-    ocr?: { engine: string; engineVersion: string; confidence: number; pageCount: number; local: true };
+    /**
+     * The balances the source states about itself, present only for formats
+     * that declare them as machine-readable fields. Passed straight to the
+     * import, which refuses a statement whose movements do not reconcile them.
+     */
+    declaredBalances?: { openingBalanceCents?: string; closingBalanceCents?: string };
+    /**
+     * How the scan was read, and by what.
+     *
+     * The pipeline already records which rows the assisted pass had to fill,
+     * how well the page was reconstructed, and whether it recommends a second
+     * look — and none of it reached this screen, so the assistance Wheat
+     * promises for scanned statements was invisible exactly where it was used.
+     * `assistedRows` are 1-based row numbers, always non-empty when a model
+     * contributed anything, because a filled cell is a proposal to check.
+     */
+    ocr?: {
+      engine: string;
+      engineVersion: string;
+      confidence: number;
+      pageCount: number;
+      local: true;
+      assistedRows?: number[];
+      fallbackRecommended?: boolean;
+      confidenceDimensions?: { layout?: number; rowReconstruction?: number; fieldMapping?: number };
+    };
   };
   complète: () => void;
 };
@@ -689,7 +716,7 @@ const pageCopy: Record<AppLanguage, Record<string, string>> = {
     payslipsPdf: "Internal payroll PDF",
     generatePayrollEntry: "Generate payroll entry",
     reportsTitle: "Reports",
-    reportsSubtitle: "Trial balance, general ledger, journal, aging, and integrity checks with complète exports.",
+    reportsSubtitle: "Trial balance, general ledger, journal, aging, and integrity checks with complete exports.",
     sageTitle: "Sage export",
     sageSubtitle: "Sage 100, Sage 50, Generation Experts, and custom TXT/CSV profiles with validation before export.",
     assistantTitle: "Local analysis",
@@ -869,6 +896,21 @@ function App() {
   const [language, setLanguage] = useState<AppLanguage>(() => readStoredLanguage());
   const [alertsMuted, setAlertsMuted] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
+  /*
+   * What Wheat is doing right now, when it is doing something slow.
+   *
+   * Several operations reach the disk or the OCR sidecar and take seconds or
+   * minutes — a full dossier backup, a restore, reading a scanned statement —
+   * and used to show nothing at all while they ran. From the outside that is
+   * indistinguishable from a frozen application, and the usual response to a
+   * frozen application is to press the button again.
+   *
+   * One label rather than a flag per button, because the useful thing to say
+   * is *what* is happening, not merely that something is. It is cleared in a
+   * `finally`: a failure must resolve the loading state, or the screen stays
+   * busy forever over an error the person already dismissed.
+   */
+  const [runningTask, setRunningTask] = useState("");
   const [loading, setLoading] = useState(true);
   const [loadFailure, setLoadFailure] = useState<LoadFailure | null>(null);
   const [browserPreview, setBrowserPreview] = useState(false);
@@ -1305,6 +1347,14 @@ function App() {
    * settings tab to find the right panel themselves.
    */
   const [identityEditorOpen, setIdentityEditorOpen] = useState(false);
+  /*
+   * The statement batch the reconciliation desk opens on.
+   *
+   * Set by the import when somebody chooses to reconcile what they have just
+   * imported, and cleared on leaving the desk so a later visit shows the whole
+   * account rather than silently hiding most of it.
+   */
+  const [reconciliationBatch, setReconciliationBatch] = useState<{ bankAccountId: string; statementId: string } | undefined>(undefined);
   /** Bumped whenever a shell-level editor changes what guided work reads. */
   const [guidedRefreshToken, setGuidedRefreshToken] = useState(0);
   const openGuidedTarget = useCallback((target: string, recordId?: string | null) => {
@@ -1319,6 +1369,15 @@ function App() {
   useEffect(() => {
     reloadJourneyRef.current = reloadJourney;
   }, [reloadJourney]);
+
+  /*
+   * A batch filter belongs to the visit that arrived with it. Leaving the desk
+   * ends that visit, so coming back later shows the whole account instead of a
+   * filtered view whose reason has been forgotten.
+   */
+  useEffect(() => {
+    if (page !== "reconciliation") setReconciliationBatch(undefined);
+  }, [page]);
 
   const openAppContextMenu = (event: any, actions: ContextMenuAction[], title?: string) => {
     event.preventDefault();
@@ -1552,7 +1611,22 @@ function App() {
 
     const file = await window.wheat.selectBankStatementFile();
     if (!file) return;
-    const parsed = await window.wheat.parseBankStatement({ sourceName: file.name, bytesBase64: file.bytesBase64 });
+    /*
+     * Reading a statement is the slowest thing Wheat does on demand: a scanned
+     * PDF goes through the local OCR sidecar and can take a minute. Only the
+     * phases actually known here are named — the page-by-page progress of the
+     * recogniser is not reported over this channel, and a percentage nobody
+     * measured is worse than no percentage.
+     */
+    setRunningTask("Analyse du relevé bancaire…");
+    let parsed;
+    try {
+      parsed = await window.wheat.parseBankStatement({ sourceName: file.name, bytesBase64: file.bytesBase64 });
+    } finally {
+      // Cleared before the dialog opens, and on failure — the caller reports
+      // the error, and a refused statement must not leave the shell busy.
+      setRunningTask("");
+    }
     const sourceSha256 = await sha256Base64(file.bytesBase64);
     await new Promise<void>((complète) => {
       setBankImportDraft({ bankAccountId, file, sourceSha256, parsed, complète });
@@ -1709,11 +1783,14 @@ function App() {
       return;
     }
 
+    setRunningTask("Sauvegarde du dossier en cours…");
     try {
       const target = await window.wheat.createBackup();
       if (target) notify(`Sauvegarde créée: ${target}`, "success");
     } catch (error) {
       notify(error instanceof Error ? error.message : "Sauvegarde impossible", "warning");
+    } finally {
+      setRunningTask("");
     }
   };
 
@@ -1723,6 +1800,7 @@ function App() {
       return;
     }
 
+    setRunningTask("Restauration de la sauvegarde…");
     try {
       const target = await window.wheat.restoreBackup();
       if (target) {
@@ -1731,6 +1809,8 @@ function App() {
       }
     } catch (error) {
       notify(error instanceof Error ? error.message : "Restauration impossible", "warning");
+    } finally {
+      setRunningTask("");
     }
   };
 
@@ -1985,6 +2065,7 @@ function App() {
                   <ReconciliationWorkbench
                     companyId={currentCompany.id}
                     initialMovementId={window.sessionStorage.getItem(reconciliationFocusKey) ?? undefined}
+                    openBatch={reconciliationBatch}
                     onImportStatement={importBankStatement}
                     onChanged={refresh}
                     onNotify={operationalNotify}
@@ -2326,6 +2407,7 @@ function App() {
 
       {bankImportDraft && (
         <BankStatementImportModal
+          companyId={activeCompanyId}
           draft={bankImportDraft}
           onClose={() => {
             bankImportDraft.complète();
@@ -2336,12 +2418,21 @@ function App() {
             notify("Le relevé a été importé après contrôle. Aucun rapprochement n'a été créé automatiquement.", "success");
             refresh();
           }}
+          onReconcileBatch={(batch) => {
+            // The import is finished and those movements now exist; what
+            // follows is the reconciliation of exactly those movements.
+            setReconciliationBatch(batch);
+            bankImportDraft.complète();
+            setBankImportDraft(null);
+            setPage("reconciliation");
+          }}
         />
       )}
 
       {reviewSurface}
       <AppContextMenu menu={appContextMenu} onRun={runContextAction} />
       <WheatUpdateNotices status={updateStatus} actions={updateActions} busy={updateBusy} />
+      <RunningTaskBanner label={runningTask} />
       <ToastStack toasts={toasts} />
     </div>
   );
@@ -4998,6 +5089,11 @@ function DocumentsPage({ data, currentCompany, notify, refresh, postDocumentEntr
     { value: "UNKNOWN", label: "Type non determine" },
   ];
   const uncertainFields: string[] = selectedExtracted.uncertainFields ?? [];
+  /* Failed arithmetic checks, explained rather than left in the advanced panel. */
+  const documentCheckIssues = useMemo(
+    () => ocrCheckIssues(selectedExtracted.accountingChecks),
+    [selectedExtracted.accountingChecks],
+  );
 
   return (
     <>
@@ -5193,6 +5289,27 @@ function DocumentsPage({ data, currentCompany, notify, refresh, postDocumentEntr
                 <Callout tone="warning" title={`${uncertainFields.length} champ(s) à confirmer`}>
                   Les champs surlignés n'ont pas été lus avec certitude. Comparez-les avec le document original avant de comptabiliser.
                 </Callout>
+              )}
+
+              {/*
+                * A document whose own arithmetic does not hold.
+                *
+                * The pipeline has always scored the reading against the rules
+                * an invoice must satisfy, and the verdicts were only visible
+                * inside the collapsed "Diagnostic d'extraction (avancé)" panel
+                * — so the person correcting the fields never learnt that the
+                * totals did not add up. They are checked findings, so they are
+                * rendered the way every other checked finding is, with the
+                * explanation affordance that comes with it.
+                */}
+              {documentCheckIssues.length > 0 && (
+                <div className="wt-stack" data-testid="ocr-check-issues">
+                  <p className="wt-hint">
+                    {documentCheckIssues.length} contrôle(s) comptable(s) de cette pièce ne passent pas. Ils n'empêchent pas
+                    la correction : ils indiquent où la lecture et le document ne concordent pas.
+                  </p>
+                  <IssueList issues={documentCheckIssues} />
+                </div>
               )}
 
               <p className="wt-hint">
@@ -5536,10 +5653,12 @@ function PayrollPage({ data, exportRows, exportPdf, postPayrollEntry, language, 
   );
 }
 
-function BankStatementImportModal({ draft, onClose, onImported }: {
+function BankStatementImportModal({ companyId, draft, onClose, onImported, onReconcileBatch }: {
+  companyId: string | undefined;
   draft: BankImportDraft;
   onClose: () => void;
   onImported: () => void;
+  onReconcileBatch: (batch: { bankAccountId: string; statementId: string }) => void;
 }) {
   const dialogRef = useAccessibleDialog<HTMLElement>(onClose);
   const [mapping, setMapping] = useState<Record<string, string>>(() => Object.fromEntries(
@@ -5549,7 +5668,46 @@ function BankStatementImportModal({ draft, onClose, onImported }: {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState<"review" | "import" | "">("");
   const [allowDuplicates, setAllowDuplicates] = useState(false);
+  const [mappingRestored, setMappingRestored] = useState(false);
   const [report, setReport] = useState<any>(null);
+
+  /*
+   * The column mapping somebody worked out, kept until the statement is
+   * actually imported.
+   *
+   * Mapping an unfamiliar statement is the slowest part of an import: it means
+   * reading the file's own headings and deciding which is the value date and
+   * whether the amounts are signed or split. Closing the dialog to go and look
+   * — or Wheat restarting — threw all of that away and re-proposed the
+   * suggestion the person had just corrected.
+   *
+   * Keyed by the file's content hash within its bank account, so the same
+   * statement offered again is recognised, and a mapping worked out for one
+   * account or one file can never appear against another.
+   *
+   * Deliberately not held: `review`, which is the service's answer and is
+   * recomputed rather than remembered, and `allowDuplicates`, which is consent
+   * to import rows Wheat believes are already there. Consent belongs to the
+   * review it was given against; restoring it later would pre-arm a duplicate
+   * import nobody re-authorised.
+   */
+  const mappingDraft = useDraftedForm<{ mapping: Record<string, string> }>({
+    companyId,
+    entity: "bank.statement.import",
+    draftKey: `${draft.bankAccountId}:${draft.sourceSha256}`,
+    open: true,
+    value: { mapping },
+    onRestore: (payload) => {
+      if (!payload?.mapping || typeof payload.mapping !== "object") return;
+      setMapping(Object.fromEntries(
+        Object.entries(payload.mapping).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+      ));
+      // A restored mapping was never checked against the file by the service.
+      setReview(null);
+      setAllowDuplicates(false);
+      setMappingRestored(true);
+    },
+  });
 
   const updateMapping = (field: string, value: string) => {
     setMapping((current) => {
@@ -5563,6 +5721,7 @@ function BankStatementImportModal({ draft, onClose, onImported }: {
     });
     setReview(null);
     setAllowDuplicates(false);
+    setMappingRestored(false);
     setError("");
   };
 
@@ -5601,6 +5760,11 @@ function BankStatementImportModal({ draft, onClose, onImported }: {
         sourceCurrency: draft.parsed.currency,
         rows: draft.parsed.rows,
         mapping,
+        // The balances the statement declares about itself, when it declares
+        // them. The import service compares them against the movements it read
+        // and refuses a statement that does not add up; sending nothing left
+        // that check permanently unavailable.
+        ...(draft.parsed.declaredBalances ?? {}),
         allowSuspectedDuplicates: Boolean(review.duplicateCount && allowDuplicates),
       });
       setReport({
@@ -5610,6 +5774,9 @@ function BankStatementImportModal({ draft, onClose, onImported }: {
         duplicateCount: result?.suspectedDuplicateRows?.length ?? 0,
         statement: result?.statement,
       });
+      // The statement is in the books, so the mapping is finished work.
+      // Reached only after the import service returned.
+      await mappingDraft.clear();
       onImported();
     } catch (importError) {
       setError(importError instanceof Error ? importError.message : "L'import n'a pas pu être finalisé.");
@@ -5630,6 +5797,7 @@ function BankStatementImportModal({ draft, onClose, onImported }: {
     ["currency", "Devise", false],
   ] as const;
   const previewHeaders = draft.parsed.headers.slice(0, 12);
+  const assistedRows = new Set(draft.parsed.ocr?.assistedRows ?? []);
 
   const headerOptions: WheatSelectOption[] = [
     { value: "", label: "Non mappé", note: "Cette information ne figure pas dans le fichier" },
@@ -5688,7 +5856,19 @@ function BankStatementImportModal({ draft, onClose, onImported }: {
             </Callout>
             <NextStep
               title="Étape suivante : rapprocher"
-              text="Associez chaque mouvement importé a l'écriture comptable qui le justifié, depuis Banque & rapprochement."
+              text={report.statement?.id
+                ? `Ouvrez les ${report.importedCount} mouvement(s) de ce relevé et associez chacun à l’écriture comptable qui le justifie.`
+                : "Associez chaque mouvement importé à l’écriture comptable qui le justifie, depuis Banque & rapprochement."}
+              action={report.statement?.id ? (
+                <Button
+                  variant="primary"
+                  icon={<ArrowRight size={15} />}
+                  data-testid="bank-import-reconcile"
+                  onClick={() => onReconcileBatch({ bankAccountId: draft.bankAccountId, statementId: String(report.statement.id) })}
+                >
+                  Rapprocher maintenant
+                </Button>
+              ) : undefined}
             />
           </div>
         ) : (
@@ -5701,9 +5881,51 @@ function BankStatementImportModal({ draft, onClose, onImported }: {
             </div>
 
             {draft.parsed.ocr && (
-              <Callout tone="info" icon={<FileSearch size={17} />} title="Relevé lu par reconnaissance de texte">
-                {draft.parsed.ocr.engine} {draft.parsed.ocr.engineVersion} · confiance {draft.parsed.ocr.confidence}% · {draft.parsed.ocr.pageCount} page(s) · traitement local.
-                Vérifiez attentivement les montants : une lecture automatique n'est jamais sure a 100 %.
+              <Callout
+                tone={draft.parsed.ocr.fallbackRecommended ? "warning" : "info"}
+                icon={<FileSearch size={17} />}
+                title="Relevé lu par reconnaissance de texte"
+              >
+                <p>
+                  {draft.parsed.ocr.engine} {draft.parsed.ocr.engineVersion} · confiance {draft.parsed.ocr.confidence}% · {draft.parsed.ocr.pageCount} page(s) · traitement local.
+                  Vérifiez attentivement les montants : une lecture automatique n'est jamais sûre à 100 %.
+                </p>
+                {/*
+                  * What the reading was actually good at. One average hides the
+                  * case that matters — a page read cleanly whose columns were
+                  * not identified — so the three parts are named separately.
+                  */}
+                {draft.parsed.ocr.confidenceDimensions && (
+                  <p data-testid="bank-import-ocr-dimensions">
+                    Mise en page {draft.parsed.ocr.confidenceDimensions.layout ?? "—"}% ·
+                    reconstruction des lignes {draft.parsed.ocr.confidenceDimensions.rowReconstruction ?? "—"}% ·
+                    identification des colonnes {draft.parsed.ocr.confidenceDimensions.fieldMapping ?? "—"}%
+                  </p>
+                )}
+                {draft.parsed.ocr.fallbackRecommended && (
+                  <p>Cette page a été difficile à lire. Contrôlez chaque ligne, ou fournissez le relevé en CSV, OFX ou CAMT.053 si votre banque le propose.</p>
+                )}
+              </Callout>
+            )}
+
+            {/*
+              * The assisted pass, named where it was used.
+              *
+              * Wheat asks a model only about rows its local reading left
+              * unusable, and only ever fills empty cells with values it can
+              * find again in the recognised text. Saying so here — and marking
+              * the rows in the preview below — is what turns that from an
+              * invisible promise into something an accountant can check.
+              */}
+            {assistedRows.size > 0 && (
+              <Callout tone="warning" icon={<Sparkles size={17} />} title="Lignes complétées par la relecture assistée">
+                <p data-testid="bank-import-assisted-rows">
+                  Ligne(s) {[...assistedRows].join(", ")} : la lecture locale n'a pas pu établir toutes les valeurs, et les cellules vides ont été complétées à partir du texte reconnu de la page.
+                </p>
+                <p>
+                  Rien n'a été remplacé : ce que Wheat avait lu est resté tel quel, et aucune valeur introuvable dans la page n'a été retenue.
+                  Ces lignes restent des propositions — vérifiez-les avant de confirmer.
+                </p>
               </Callout>
             )}
 
@@ -5721,6 +5943,11 @@ function BankStatementImportModal({ draft, onClose, onImported }: {
               <Explainer>
                 Choisissez soit une colonne de <strong>montant signé</strong> (positif = encaissement, négatif = décaissement), soit deux colonnes séparées <strong>Débit</strong> et <strong>Crédit</strong>. Une colonne « solde » n'est jamais un mouvement.
               </Explainer>
+              {mappingRestored && (
+                <Callout tone="info" title="Correspondance retrouvée">
+                  Le travail que vous aviez commencé sur ce relevé a été retrouvé. Vérifiez-le, puis relancez « Vérifier le mapping » : rien n'est importé tant que vous n'avez pas confirmé.
+                </Callout>
+              )}
               <div className="wt-form-grid">
                 {mappingFields.map(([field, label, required]) => (
                   <Field key={field} label={label} htmlFor={`bank-map-${field}`} required={Boolean(required)} optional={!required}>
@@ -5753,12 +5980,19 @@ function BankStatementImportModal({ draft, onClose, onImported }: {
                     </tr>
                   </thead>
                   <tbody>
-                    {draft.parsed.previewRows.map((row, index) => (
-                      <tr key={index}>
-                        <td className="wt-num">{index + 1}</td>
-                        {previewHeaders.map((header) => <td key={header}>{row[header] || "—"}</td>)}
-                      </tr>
-                    ))}
+                    {draft.parsed.previewRows.map((row, index) => {
+                      // 1-based, matching the row numbers the pipeline reports.
+                      const assisted = assistedRows.has(index + 1);
+                      return (
+                        <tr key={index} className={assisted ? "wt-row--assisted" : undefined}>
+                          <td className="wt-num">
+                            {index + 1}
+                            {assisted && <span className="wt-assisted-mark" title="Ligne complétée par la relecture assistée : à vérifier">·IA</span>}
+                          </td>
+                          {previewHeaders.map((header) => <td key={header}>{row[header] || "—"}</td>)}
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </TableWrap>
@@ -7584,6 +7818,7 @@ function CommandPalette({ open, onClose, setPage, openEntryModal, setCompanyModa
   const [commandQuery, setCommandQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const dialogRef = useAccessibleDialog<HTMLDivElement>(onClose, open);
+  const listRef = useRef<HTMLDivElement>(null);
 
   const navigationActions = navItems.map((item) => ({
     group: "Aller a",
@@ -7614,6 +7849,15 @@ function CommandPalette({ open, onClose, setPage, openEntryModal, setCompanyModa
     }
   }, [open]);
 
+  /*
+   * The arrow keys move a selection the pointer never touched, so nothing
+   * scrolls on its own. Without this the highlight walks past the bottom of
+   * the list and the person is choosing a command they cannot see.
+   */
+  useEffect(() => {
+    listRef.current?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex, commandQuery]);
+
   if (!open) return null;
 
   const run = (index: number) => {
@@ -7629,7 +7873,7 @@ function CommandPalette({ open, onClose, setPage, openEntryModal, setCompanyModa
     <div className="wt-palette-backdrop" role="presentation" onMouseDown={onClose}>
       <motion.div
         ref={dialogRef}
-        className="wt-palette command-palette"
+        className="wt-palette"
         role="dialog"
         aria-modal="true"
         aria-label="Palette de commandes"
@@ -7638,7 +7882,7 @@ function CommandPalette({ open, onClose, setPage, openEntryModal, setCompanyModa
         animate={{ opacity: 1, y: 0 }}
         onMouseDown={(event) => event.stopPropagation()}
       >
-        <div className="wt-palette__search command-input">
+        <div className="wt-palette__search">
           <Command size={18} aria-hidden="true" />
           <input
             data-autofocus
@@ -7666,7 +7910,7 @@ function CommandPalette({ open, onClose, setPage, openEntryModal, setCompanyModa
           />
         </div>
 
-        <div className="wt-palette__list" id="wt-palette-list" role="listbox" aria-label="Commandes disponibles">
+        <div ref={listRef} className="wt-palette__list" id="wt-palette-list" role="listbox" aria-label="Commandes disponibles">
           {visibleActions.map((action, index) => {
             const Icon = action.icon;
             const showGroup = action.group !== lastGroup;
@@ -7706,6 +7950,35 @@ function CommandPalette({ open, onClose, setPage, openEntryModal, setCompanyModa
           <span><span className="wt-kbd">Echap</span> fermer</span>
         </div>
       </motion.div>
+    </div>
+  );
+}
+
+/**
+ * What Wheat is working on, while it works on it.
+ *
+ * Deliberately a label and an indeterminate indicator, never a percentage:
+ * none of the operations that use this reports how far along it is, and a bar
+ * that fills at a rate nobody measured is a lie that people plan around. It is
+ * a `status` region rather than an `alert` — this is not an interruption, and
+ * it must not steal focus from whatever somebody is typing.
+ */
+function RunningTaskBanner({ label }: { label: string }) {
+  return (
+    <div className="wt-running-task" role="status" aria-live="polite">
+      <AnimatePresence>
+        {label && (
+          <motion.div
+            className="wt-running-task__body"
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 8 }}
+          >
+            <LoaderCircle size={15} className="wt-running-task__spin" aria-hidden="true" />
+            <span>{label}</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

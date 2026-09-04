@@ -61,6 +61,26 @@ export interface CanonicalBankTransaction {
   raw: Record<string, string>;
 }
 
+/**
+ * The balances a statement states about itself.
+ *
+ * Wheat already knows how to check that an opening balance plus the movements
+ * it read equals the stated closing balance, and refuses an import where they
+ * disagree. Until now nothing supplied the two figures, so that check recorded
+ * `equationChecked: false` on every statement ever imported and never once ran.
+ *
+ * These are read only from formats that state them as machine-readable fields.
+ * A number that merely looks like a balance on a scanned page is not evidence:
+ * guessing one would turn a real guard into a source of false refusals, so a
+ * format that does not declare its balances reports none and the statement-level
+ * check stays honestly unavailable.
+ */
+export interface StatementDeclaredBalances {
+  /** Exact integer centimes, signed. Absent when the format does not state it. */
+  openingBalanceCents?: string;
+  closingBalanceCents?: string;
+}
+
 export interface ParsedBankStatement {
   format: BankStatementFormat;
   formatLabel: string;
@@ -73,6 +93,8 @@ export interface ParsedBankStatement {
   rowCount: number;
   previewRows: Array<Record<string, string>>;
   canonicalRows: CanonicalBankTransaction[];
+  /** Present only when the source declares them; see StatementDeclaredBalances. */
+  declaredBalances?: StatementDeclaredBalances;
   ocr?: {
     engine: string;
     engineVersion: string;
@@ -329,7 +351,26 @@ function mt940Date(value: string): string {
   return `${fullYear}-${value.slice(2, 4)}-${value.slice(4, 6)}`;
 }
 
-function parseMt940(text: string): { rows: Array<Record<string, string>>; currency: string | null; warnings: string[] } {
+/**
+ * An MT940 balance field: `:60F:C260825MAD1000,00`.
+ *
+ * The mark is the bank's own sign — `C` for a credit balance, `D` for a debit
+ * one — so no convention is assumed here beyond the one the format defines.
+ * Returns exact integer centimes as a string, or null when the field is absent
+ * or malformed; a balance that cannot be read is reported as no balance rather
+ * than as a zero, because a zero would be checked and would be wrong.
+ */
+function mt940BalanceCents(text: string, tag: "60" | "62"): string | null {
+  const match = new RegExp(`:${tag}[FM]:([CD])[0-9]{6}[A-Z]{3}([0-9][0-9.,]*)`, "i").exec(text);
+  if (!match) return null;
+  const digits = match[2].replace(/\./g, "").replace(",", ".");
+  const [whole, fraction = ""] = digits.split(".");
+  if (!/^[0-9]+$/.test(whole) || !/^[0-9]*$/.test(fraction) || fraction.length > 2) return null;
+  const magnitude = BigInt(whole) * 100n + BigInt((fraction + "00").slice(0, 2));
+  return (match[1].toUpperCase() === "D" ? -magnitude : magnitude).toString();
+}
+
+function parseMt940(text: string): { rows: Array<Record<string, string>>; currency: string | null; warnings: string[]; declaredBalances?: StatementDeclaredBalances } {
   const currency = /:6[02][FM]:[CD][0-9]{6}([A-Z]{3})/i.exec(text)?.[1]?.toUpperCase() ?? null;
   const matches = [...text.matchAll(/^:61:(\d{6})(\d{4})?[^\r\n]*?([CD])(?:R)?([0-9][0-9.,]*)([A-Z][A-Z0-9]{3})([^\r\n]*)(?:\r?\n:86:([^\r\n]*(?:\r?\n(?!:)[^\r\n]*)*))?/gim)];
   if (!matches.length) throw userError("Le fichier MT940 ne contient aucune ligne :61: reconnue.");
@@ -346,7 +387,13 @@ function parseMt940(text: string): { rows: Array<Record<string, string>>; curren
       Currency: currency ?? "",
     });
   });
-  return { rows, currency, warnings: [] };
+  const openingBalanceCents = mt940BalanceCents(text, "60");
+  const closingBalanceCents = mt940BalanceCents(text, "62");
+  const declaredBalances: StatementDeclaredBalances = {
+    ...(openingBalanceCents === null ? {} : { openingBalanceCents }),
+    ...(closingBalanceCents === null ? {} : { closingBalanceCents }),
+  };
+  return { rows, currency, warnings: [], ...(Object.keys(declaredBalances).length ? { declaredBalances } : {}) };
 }
 
 function parseCamt053(text: string): { rows: Array<Record<string, string>>; currency: string | null; warnings: string[] } {
@@ -847,7 +894,7 @@ function canonicalRows(table: ParsedTable, currency: string | null, ocr?: Parsed
   });
 }
 
-function finalize(format: BankStatementFormat, parser: string, table: ParsedTable, warnings: string[], currency: string | null, ocr?: ParsedBankStatement["ocr"]): ParsedBankStatement {
+function finalize(format: BankStatementFormat, parser: string, table: ParsedTable, warnings: string[], currency: string | null, ocr?: ParsedBankStatement["ocr"], declaredBalances?: StatementDeclaredBalances): ParsedBankStatement {
   if (!table.rows.length) throw userError("Le relevé ne contient aucune transaction exploitable.");
   if (table.rows.length > MAX_ROWS) throw userError(`Le relevé dépasse la limite sûre de ${MAX_ROWS} transactions.`);
   return {
@@ -862,6 +909,7 @@ function finalize(format: BankStatementFormat, parser: string, table: ParsedTabl
     rowCount: table.rows.length,
     previewRows: table.rows.slice(0, 20),
     canonicalRows: canonicalRows(table, currency, ocr),
+    ...(declaredBalances && Object.keys(declaredBalances).length ? { declaredBalances } : {}),
     ...(ocr ? { ocr } : {}),
   };
 }
@@ -917,7 +965,7 @@ export async function parseBankStatement(input: ParseBankStatementInput): Promis
   }
   if (/^:20:/m.test(trimmed) && /^:61:/m.test(trimmed)) {
     const parsed = parseMt940(trimmed);
-    return finalize("MT940", "Mt940BankParser", { headers: STANDARD_HEADERS, rows: parsed.rows, warnings: [] }, parsed.warnings, parsed.currency);
+    return finalize("MT940", "Mt940BankParser", { headers: STANDARD_HEADERS, rows: parsed.rows, warnings: [] }, parsed.warnings, parsed.currency, undefined, parsed.declaredBalances);
   }
   if (/<(?:\w+:)?BkToCstmrStmt\b/i.test(trimmed) || /camt\.053/i.test(trimmed)) {
     const parsed = parseCamt053(trimmed);

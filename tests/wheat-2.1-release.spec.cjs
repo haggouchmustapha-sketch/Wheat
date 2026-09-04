@@ -387,9 +387,21 @@ test("a short window keeps the whole first-run form reachable", async () => {
 
 /* ----------------------------------------------------------------- version */
 
-test("every version location agrees on 2.1.260901", () => {
+test("every version location agrees, and only package.json states the version", () => {
   const packageMetadata = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
-  expect(packageMetadata.version).toBe("2.1.260901");
+  /*
+   * `package.json` is the one place a version is written, so it is read here
+   * rather than restated.
+   *
+   * This assertion used to name a literal, which meant every release broke a
+   * test that has nothing to do with releasing — and a stale literal proves
+   * only that somebody edited two files, not that the locations agree. The
+   * shape is checked against the documented scheme instead: 2.1.<YYMMDD><n>,
+   * valid SemVer, compared as versions and never as strings.
+   */
+  expect(packageMetadata.version).toMatch(/^\d+\.\d+\.\d+$/);
+  // 2.1.<YYMMDD> plus an optional same-day counter.
+  expect(packageMetadata.version).toMatch(/^2\.1\.\d{6,}$/);
   expect(packageMetadata.build.artifactName).toContain("${version}");
 
   // electron-builder writes a stripped package.json for the shipped asar, and

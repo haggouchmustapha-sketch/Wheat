@@ -326,3 +326,98 @@ test("major pages fit gradual desktop sizes and supported zoom levels", async ()
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });
+
+
+/*
+ * The command palette used to be measured against the window twice: the
+ * backdrop pushed it down from the top, and the palette itself was allowed to
+ * be nearly a full window tall. The two figures were added together, so the
+ * bottom of the list sat under the Windows taskbar and the last commands could
+ * not be reached. It is measured against the space the backdrop actually leaves
+ * now, and this is the test that says so.
+ */
+test("the command palette fits the window and scrolls its own list", async () => {
+  test.setTimeout(120_000);
+
+  const cwd = process.env.WHEAT_CWD ?? path.resolve(__dirname, "..");
+  const electronExe = path.join(cwd, "node_modules", "electron", "dist", "electron.exe");
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "wheat-palette-"));
+
+  const app = await electron.launch({
+    executablePath: electronExe,
+    args: [cwd],
+    cwd,
+    env: { ...process.env, WHEAT_USER_DATA_DIR: path.join(tempDir, "userData") },
+  });
+
+  try {
+    const page = await app.firstWindow();
+    const browserWindow = await app.browserWindow(page);
+    await page.waitForLoadState("domcontentloaded");
+    await page.waitForFunction(() => Boolean(window.wheat), null, { timeout: 15_000 });
+    await page.evaluate(async () => {
+      await window.wheat.resetWorkspace({ mode: "demo" });
+      window.localStorage.setItem("atlas-ledger-language", "fr");
+    });
+    await page.reload();
+    await page.waitForFunction(() => Boolean(window.wheat), null, { timeout: 15_000 });
+    await expect(page.locator(".app-shell")).toBeVisible({ timeout: 15_000 });
+
+    for (const [width, height] of [[1366, 768], [1600, 900], [1920, 1080]]) {
+      await browserWindow.evaluate((win, bounds) => win.setSize(bounds.width, bounds.height), { width, height });
+      await page.waitForTimeout(120);
+
+      await page.keyboard.press("Control+K");
+      const palette = page.locator(".wt-palette");
+      await expect(palette).toBeVisible();
+
+      const metrics = await palette.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        const search = element.querySelector(".wt-palette__search");
+        const list = element.querySelector(".wt-palette__list");
+        return {
+          viewportHeight: window.innerHeight,
+          viewportWidth: window.innerWidth,
+          top: rect.top,
+          bottom: rect.bottom,
+          left: rect.left,
+          right: rect.right,
+          searchTop: search ? search.getBoundingClientRect().top : null,
+          listOverflowY: list ? getComputedStyle(list).overflowY : null,
+          listScrolls: list ? list.scrollHeight > list.clientHeight : false,
+          paletteScrolls: element.scrollHeight > element.clientHeight + 1,
+        };
+      });
+      const label = `palette at ${width}x${height}: ${JSON.stringify(metrics)}`;
+
+      // Inside the window on every edge. This is the defect itself.
+      expect(metrics.top, label).toBeGreaterThanOrEqual(-1);
+      expect(metrics.bottom, label).toBeLessThanOrEqual(metrics.viewportHeight + 1);
+      expect(metrics.left, label).toBeGreaterThanOrEqual(-1);
+      expect(metrics.right, label).toBeLessThanOrEqual(metrics.viewportWidth + 1);
+
+      // The list scrolls, not the palette: the search field stays put while
+      // the commands move under it.
+      expect(["auto", "scroll"], label).toContain(metrics.listOverflowY);
+      expect(metrics.paletteScrolls, label).toBe(false);
+
+      // Arrow keys must bring the selection into view rather than walking it
+      // off the bottom of a list that never scrolled.
+      for (let step = 0; step < 14; step += 1) await page.keyboard.press("ArrowDown");
+      await page.waitForTimeout(80);
+      const active = await page.locator(".wt-palette__list [aria-selected=\"true\"]").evaluate((element) => {
+        const item = element.getBoundingClientRect();
+        const list = element.closest(".wt-palette__list").getBoundingClientRect();
+        return { itemTop: item.top, itemBottom: item.bottom, listTop: list.top, listBottom: list.bottom };
+      });
+      expect(active.itemTop, `selected item above the list at ${width}x${height}`).toBeGreaterThanOrEqual(active.listTop - 1);
+      expect(active.itemBottom, `selected item below the list at ${width}x${height}`).toBeLessThanOrEqual(active.listBottom + 1);
+
+      await page.keyboard.press("Escape");
+      await expect(page.locator(".wt-palette")).toHaveCount(0);
+    }
+  } finally {
+    await app.close();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});

@@ -126,6 +126,47 @@ test("context actions delete drafts while bank exclusions preserve history", asy
     await page.locator(".op-inspector").getByRole("button", { name: "Confirmer" }).click();
     await expect(page.locator(".op-inspector")).toContainText("Mouvement exclu", { timeout: 15000 });
 
+    /*
+     * A refusal an accountant can act on.
+     *
+     * The movement is changed from elsewhere while this screen still holds the
+     * version it was shown — the one refusal no client-side guard can prevent,
+     * because the guard cannot know about the other window. What used to
+     * appear was the service's own sentence, in English, with no indication of
+     * what to do about it. It is now stated in French and carries the rule,
+     * the reason and the next step behind the information control.
+     *
+     * The two operations below cancel out, so the movement ends this block
+     * exactly as it started it: excluded.
+     */
+    await page.evaluate(async (bankRef) => {
+      const boot = await window.wheat.getBootstrap();
+      const workspace = await window.wheat.getReconciliationWorkspace({ companyId: boot.activeCompanyId, includeExcluded: true });
+      const movement = workspace.movements.find((item) => String(item.reference ?? "").includes(bankRef));
+      if (!movement) throw new Error(`no movement for ${bankRef}`);
+      await window.wheat.restoreBankMovement({ movementId: movement.id, expectedRevision: movement.revision });
+      await window.wheat.excludeBankMovement({ movementId: movement.id, expectedRevision: movement.revision + 1, reason: "Modifié depuis une autre fenêtre" });
+    }, fixture.bankRef);
+
+    await page.locator(".op-inspector").getByRole("button", { name: "Examiner la restauration" }).click();
+    await page.locator(".op-inspector").getByRole("button", { name: "Confirmer" }).click();
+
+    const notice = page.locator(".op-notice");
+    await expect(notice).toContainText("Ce mouvement a changé depuis son affichage.", { timeout: 15000 });
+    // Neither the service's English sentence nor Electron's IPC wrapper is
+    // what the accountant reads.
+    await expect(notice).not.toContainText("changed in another window");
+    await expect(notice).not.toContainText("invoking remote method");
+    const explain = notice.getByRole("button", { name: /^Explication :/ });
+    await expect(explain).toHaveCount(1);
+    // Reached by pointer here; the same control also opens on keyboard focus.
+    await explain.hover();
+    const bubble = notice.getByRole("tooltip");
+    await expect(bubble).toContainText("À faire :");
+    await expect(bubble).toContainText("demande une vérification");
+    // The exact refusal stays reachable for support, behind the disclosure.
+    await expect(bubble).toContainText("Détail technique");
+
     if (fixture.employeeName) {
       await page.locator(".wt-rail").getByRole("button", { name: "Paie", exact: true }).click();
       const employeeRow = page.locator("tbody tr").filter({ hasText: fixture.employeeName });

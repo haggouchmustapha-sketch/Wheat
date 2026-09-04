@@ -21,6 +21,12 @@ async function makeFixtures(root) {
     "Date opération;Libellé;Référence;Débit;Crédit;Devise",
     "20/08/2026;Virement Client Test;REF-CSV;;100,00;MAD",
   ].join("\r\n"));
+  // Two rows, so arriving on this batch is visibly narrower than the account.
+  fixtures.batch = writeText(root, "atlas-bank-batch.csv", [
+    "Date opération;Libellé;Référence;Débit;Crédit;Devise",
+    "28/08/2026;Virement Lot A;REF-LOT-A;;210,00;MAD",
+    "29/08/2026;Prélèvement Lot B;REF-LOT-B;35,50;;MAD",
+  ].join("\r\n"));
   fixtures.semicolon = writeText(root, "atlas-bank-semicolon.txt", "Date;Description;Reference;Amount;Currency\n21/08/2026;Frais TXT;REF-TXT-SEMI;-11,25;MAD\n");
   fixtures.tab = writeText(root, "atlas-bank-tab.txt", "Date\tDescription\tReference\tAmount\tCurrency\n2026-08-22\tEncaissement TAB\tREF-TXT-TAB\t12.50\tMAD\n");
   fixtures.bad = writeText(root, "atlas-bank-bad.csv", "Date;Description;Reference;Amount\n32/08/2026;Date impossible;REF-BAD;10,00\n");
@@ -155,7 +161,45 @@ test("Wheat 2.0 reviews, imports, deduplicates and persists every implemented ba
       await expect(page.locator(".op-recon-table")).toContainText(reference, { timeout: 15000 });
     };
 
+    /*
+     * The column mapping is work, so closing the dialog does not destroy it.
+     *
+     * Working out which column is the value date means reading the file, which
+     * is precisely what somebody closes this dialog to do. The mapping was
+     * held in component state, so coming back re-proposed the suggestion they
+     * had just corrected. It is now held against this file in this account.
+     */
+    await selectNativeFile(app, fixtures.csv);
+    await page.getByRole("button", { name: "Importer un relevé" }).click();
+    const mappingModal = page.getByRole("dialog", { name: "Contrôler le relevé bancaire" });
+    await expect(mappingModal).toBeVisible({ timeout: 15000 });
+    await chooseOption(page, mappingModal.getByRole("combobox", { name: "Date de valeur" }), { label: "Date opération" });
+    await expect(mappingModal.getByRole("combobox", { name: "Date de valeur" })).toContainText("Date opération");
+    // Past the autosave debounce, so this is persistence and not a race.
+    await page.waitForTimeout(1000);
+    await mappingModal.getByRole("button", { name: "Annuler" }).click();
+    await expect(mappingModal).toHaveCount(0);
+
+    await selectNativeFile(app, fixtures.csv);
+    await page.getByRole("button", { name: "Importer un relevé" }).click();
+    await expect(mappingModal).toBeVisible({ timeout: 15000 });
+    await expect(mappingModal).toContainText("Correspondance retrouvée", { timeout: 15000 });
+    await expect(mappingModal.getByRole("combobox", { name: "Date de valeur" })).toContainText("Date opération");
+    /*
+     * A restored mapping has not been checked by the service, so the import
+     * button stays shut until somebody re-runs the review. Restoring work must
+     * never restore permission to write.
+     */
+    await expect(mappingModal.getByTestId("bank-import-confirm")).toBeDisabled();
+    // Put it back as it was, so the rest of this suite imports what it expects.
+    await chooseOption(page, mappingModal.getByRole("combobox", { name: "Date de valeur" }), { label: "Non mappé" });
+    await expect(mappingModal).not.toContainText("Correspondance retrouvée");
+    await page.waitForTimeout(1000);
+    await mappingModal.getByRole("button", { name: "Annuler" }).click();
+    await expect(mappingModal).toHaveCount(0);
+
     await importReviewed(fixtures.csv, /CSV/, "REF-CSV");
+
 
     // Exact bytes remain blocked after a rename; the file chooser never writes
     // a second movement before this review finishes.
@@ -177,6 +221,39 @@ test("Wheat 2.0 reviews, imports, deduplicates and persists every implemented ba
     await importReviewed(fixtures.camt, /CAMT\.053/, "REF-CAMT");
     await importReviewed(fixtures.pdf, /PDF/, "REF-PDF");
 
+    /*
+     * The import leads to the work it just created.
+     *
+     * The report used to end on a sentence naming the screen to go to next,
+     * which left the reader to find that screen and then to find their own
+     * movements among every movement the account had ever held. "Rapprocher
+     * maintenant" opens the desk on that file, and says which file it shows.
+     */
+    await selectNativeFile(app, fixtures.batch);
+    await page.getByRole("button", { name: "Importer un relevé" }).click();
+    const batchModal = page.getByRole("dialog", { name: "Contrôler le relevé bancaire" });
+    await expect(batchModal).toBeVisible({ timeout: 15000 });
+    await batchModal.getByTestId("bank-import-review").click();
+    await expect(batchModal.getByTestId("bank-import-confirm")).toBeEnabled({ timeout: 15000 });
+    await batchModal.getByTestId("bank-import-confirm").click();
+    await expect(page.getByTestId("bank-import-report")).toBeVisible({ timeout: 15000 });
+
+    await page.getByTestId("bank-import-reconcile").click();
+    // The dialog is gone and the desk is open on that statement alone.
+    await expect(page.getByTestId("bank-import-report")).toHaveCount(0);
+    await expect(page.locator(".op-batch-banner")).toBeVisible({ timeout: 15000 });
+    const batchRows = page.locator(".op-recon-table tbody tr");
+    await expect(batchRows).toHaveCount(2, { timeout: 15000 });
+    await expect(page.locator(".op-recon-table")).toContainText("REF-LOT-A");
+    await expect(page.locator(".op-recon-table")).toContainText("REF-LOT-B");
+    await expect(page.locator(".op-recon-table")).not.toContainText("REF-CSV");
+
+    // Leaving the batch shows the whole account again.
+    await page.locator(".op-batch-banner").getByRole("button", { name: "Voir tout le compte" }).click();
+    await expect(page.locator(".op-batch-banner")).toHaveCount(0);
+    await expect(page.locator(".op-recon-table")).toContainText("REF-CSV", { timeout: 15000 });
+    expect(await batchRows.count()).toBeGreaterThan(2);
+
     // Bad rows block atomic persistence in the review screen.
     await selectNativeFile(app, fixtures.bad);
     await page.getByRole("button", { name: "Importer un relevé" }).click();
@@ -191,12 +268,86 @@ test("Wheat 2.0 reviews, imports, deduplicates and persists every implemented ba
     await page.getByRole("button", { name: "Importer un relevé" }).click();
     await expect(page.locator(".op-notice")).toContainText("XLS binaire hérité", { timeout: 15000 });
 
+    /*
+     * The statement's own two money columns.
+     *
+     * The table used to carry one signed "Montant", which asked an accountant
+     * to read a minus sign to answer a question the relève prints plainly. A
+     * movement now appears under Débit or under Crédit, and never under both.
+     */
+    // Rendered headings are upper-cased by the stylesheet, so they are
+    // compared in one case rather than as typed.
+    const headings = (await page.locator(".op-recon-table thead th").allInnerTexts())
+      .map((heading) => heading.trim().toLocaleUpperCase("fr-FR"));
+    expect(headings).toContain("DÉBIT");
+    expect(headings).toContain("CRÉDIT");
+    expect(headings).not.toContain("MONTANT");
+
     // Reconcile the CSV movement against the posted bank line.
     const movementRow = page.locator(".op-recon-table tbody tr").filter({ hasText: "REF-CSV" });
+
+    const debitIndex = headings.indexOf("DÉBIT");
+    const creditIndex = headings.indexOf("CRÉDIT");
+    const sides = await movementRow.evaluate((row, columns) => ({
+      debit: row.children[columns.debitIndex].textContent.trim(),
+      credit: row.children[columns.creditIndex].textContent.trim(),
+    }), { debitIndex, creditIndex });
+    const filled = [sides.debit, sides.credit].filter((cell) => cell !== "—");
+    expect(filled, `one column carries the amount: ${JSON.stringify(sides)}`).toHaveLength(1);
+    expect(filled[0]).toMatch(/\d/);
+
     await movementRow.click();
     const inspector = page.getByRole("complementary", { name: "Inspecteur de rapprochement" });
     await expect(inspector).toContainText("BANK-CSV-100", { timeout: 15000 });
-    await inspector.getByRole("button", { name: /BANK-CSV-100/ }).click();
+
+    /*
+     * A suggestion the accountant can judge instead of trust.
+     *
+     * The entry is dated the same day as the movement and carries the same
+     * 100,00, and its piece number does not contain the statement reference —
+     * so the score is exactly those two facts, and the screen says so in
+     * words. A raw code reaching the screen would be a defect, not a detail.
+     */
+    const candidate = inspector.locator(".op-candidate-row").filter({ hasText: "BANK-CSV-100" });
+    await expect(candidate.locator(".op-score")).toHaveText("85%");
+    await expect(candidate.locator(".op-candidate-reasons")).toHaveText("même montant · même jour");
+    await expect(inspector.locator(".op-candidate-reasons")).not.toContainText(/[A-Z]{3,}_/);
+
+    // Manual search reaches a line the ranking would have buried.
+    const candidateSearch = inspector.getByPlaceholder("Chercher une écriture");
+    await candidateSearch.fill("ZZZ-INTROUVABLE");
+    await expect(inspector.locator(".op-candidate-row")).toHaveCount(0);
+    await expect(inspector).toContainText("Aucune écriture chargée ne correspond à cette recherche.");
+    await candidateSearch.fill("BANK-CSV");
+    await expect(candidate).toHaveCount(1);
+    await candidateSearch.fill("");
+
+    /*
+     * A rejection is a decision, so it outlives the screen it was made on.
+     * Rejecting, leaving the desk entirely and coming back must show the
+     * suggestion still ruled out — that is the difference between component
+     * state and the movement's persisted review draft.
+     */
+    await candidate.getByRole("button", { name: /^Écarter la suggestion/ }).click();
+    await expect(inspector).toContainText("1 suggestion(s) écartée(s)");
+    await expect(inspector).toContainText("Toutes les suggestions ont été écartées.");
+    await expect(candidate).toHaveCount(0);
+    // Past the draft autosave debounce, so persistence is not merely the
+    // unmount flush winning a race.
+    await page.waitForTimeout(1000);
+
+    await page.locator(".wt-rail").getByRole("button", { name: "Écritures", exact: true }).click();
+    await expect(page.locator("tbody tr").filter({ hasText: "BANK-CSV-100" }).first()).toBeVisible({ timeout: 15000 });
+    await page.locator(".wt-rail").getByRole("button", { name: "Banque & rapprochement", exact: true }).click();
+    await expect(page.locator(".op-recon-table")).toBeVisible({ timeout: 15000 });
+    await page.locator(".op-recon-table tbody tr").filter({ hasText: "REF-CSV" }).click();
+    await expect(inspector).toContainText("1 suggestion(s) écartée(s)", { timeout: 15000 });
+    await expect(candidate).toHaveCount(0);
+    // Nothing is hidden irreversibly.
+    await inspector.getByRole("button", { name: "Réafficher" }).click();
+    await expect(candidate).toHaveCount(1);
+
+    await candidate.locator(".op-candidate-pick").click();
     await inspector.getByRole("button", { name: "Examiner l’allocation" }).click();
     await inspector.getByRole("button", { name: "Confirmer" }).click();
     await expect(inspector).toContainText("Rapproché", { timeout: 15000 });
@@ -212,11 +363,31 @@ test("Wheat 2.0 reviews, imports, deduplicates and persists every implemented ba
         movementCount: workspace.movements.length,
         statementCount: workspace.accounts[0].statements.length,
         formats: workspace.accounts[0].statements.map((item) => item.sourceFormat).sort(),
+        validation: Object.fromEntries(workspace.accounts[0].statements.map((item) => [item.sourceFormat, JSON.parse(item.validationJson ?? "{}")])),
         reconciled: workspace.movements.filter((item) => item.reconciliation.status === "RECONCILED").length,
       };
     });
-    expect(firstRuntimeSnapshot).toMatchObject({ movementCount: 9, statementCount: 9, reconciled: 1 });
-    expect(firstRuntimeSnapshot.formats).toEqual(["CAMT053", "CSV", "MT940", "OFX", "PDF_TEXT", "QIF", "TXT", "TXT", "XLSX"]);
+    expect(firstRuntimeSnapshot).toMatchObject({ movementCount: 11, statementCount: 10, reconciled: 1 });
+    expect(firstRuntimeSnapshot.formats).toEqual(["CAMT053", "CSV", "CSV", "MT940", "OFX", "PDF_TEXT", "QIF", "TXT", "TXT", "XLSX"]);
+
+    /*
+     * The statement-level cross-check, on a real import.
+     *
+     * MT940 states its own opening and closing balances, so Wheat reconciles
+     * the movements it read against them. This assertion is the one that would
+     * have caught the check being dead: every statement ever imported recorded
+     * equationChecked false, because nothing supplied the two figures.
+     */
+    const mt940Validation = firstRuntimeSnapshot.validation.MT940;
+    expect(mt940Validation.equationChecked, "the MT940 balance equation was not checked").toBe(true);
+    expect(mt940Validation.statedClosingBalanceCents).toBe("101600");
+    expect(mt940Validation.expectedClosingBalanceCents).toBe("101600");
+    expect(mt940Validation.differenceCents).toBe("0");
+
+    // A format that states no balances says so, rather than claiming a check
+    // it could not perform.
+    expect(firstRuntimeSnapshot.validation.QIF.equationChecked).toBe(false);
+    expect(firstRuntimeSnapshot.validation.QIF.statedClosingBalanceCents).toBeNull();
 
     await app.close();
     app = null;
@@ -228,7 +399,7 @@ test("Wheat 2.0 reviews, imports, deduplicates and persists every implemented ba
     await expect(page.locator(".app-shell")).toBeVisible({ timeout: 15000 });
     await page.locator(".wt-rail").getByRole("button", { name: "Banque & rapprochement", exact: true }).click();
     await expect(page.locator(".op-recon-table")).toContainText("REF-PDF", { timeout: 15000 });
-    await expect(page.getByTestId("bank-import-history-row")).toHaveCount(9);
+    await expect(page.getByTestId("bank-import-history-row")).toHaveCount(10);
     await page.locator(".op-compact-select select").selectOption("ALL");
     await expect(page.locator(".op-recon-table tbody tr").filter({ hasText: "REF-CSV" })).toContainText("Rapproché");
     const restartSnapshot = await page.evaluate(async (companyId) => {
@@ -239,7 +410,7 @@ test("Wheat 2.0 reviews, imports, deduplicates and persists every implemented ba
         reconciled: workspace.movements.filter((item) => item.reconciliation.status === "RECONCILED").length,
       };
     }, firstRuntimeSnapshot.companyId);
-    expect(restartSnapshot).toEqual({ movements: 9, statements: 9, reconciled: 1 });
+    expect(restartSnapshot).toEqual({ movements: 11, statements: 10, reconciled: 1 });
 
     const meaningfulErrors = runtimeErrors.filter((message) => /RENDERER_(?:PAGE|CONSOLE)_ERROR|UnhandledPromiseRejection|uncaught exception/i.test(message));
     expect(meaningfulErrors).toEqual([]);

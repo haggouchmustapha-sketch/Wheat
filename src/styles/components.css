@@ -812,6 +812,23 @@
 .wt-table--dense tbody td { padding: var(--space-4) var(--space-5); }
 .wt-table--dense thead th { padding: var(--space-3) var(--space-5); }
 
+/* A row the assisted pass had to complete. Marked, not hidden: the values are
+   proposals drawn from the page, and the person confirming needs to see which
+   ones to check. The badge carries the meaning, so the tint is not the only
+   signal. */
+.wt-table tbody tr.wt-row--assisted td { background: var(--warning-soft); }
+
+.wt-assisted-mark {
+  margin-left: var(--space-2);
+  border-radius: var(--radius-sm);
+  padding: 0 4px;
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: 9px;
+  font-weight: var(--weight-medium);
+  letter-spacing: 0.02em;
+}
+
 .wt-table .wt-num,
 .wt-table .is-numeric { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .wt-table th.is-numeric { text-align: right; }
@@ -1210,6 +1227,41 @@
 .wt-search input::placeholder { color: var(--text-faint); }
 
 /* -- M. Toasts -------------------------------------------------------------- */
+
+/* Bottom-centre, clear of the toast corner: a toast reports something that
+   finished, this reports something still running, and the two must not land on
+   top of each other at the moment one becomes the other. */
+.wt-running-task {
+  position: fixed;
+  bottom: var(--space-7);
+  left: 50%;
+  z-index: var(--z-toast);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.wt-running-task__body {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-4) var(--space-5);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  color: var(--text);
+  font-size: var(--text-sm);
+}
+
+.wt-running-task__spin {
+  flex: none;
+  color: var(--brand);
+  animation: wt-spin 720ms linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wt-running-task__spin { animation: none; }
+}
 
 .wt-toasts {
   position: fixed;

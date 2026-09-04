@@ -87,11 +87,11 @@ test("Wheat desktop core workflows mutate SQLite through preload API", async () 
   await page.keyboard.press("Backspace");
 
   await page.keyboard.press("Control+K");
-  await expect(page.locator(".command-input input")).toBeFocused();
+  await expect(page.locator(".wt-palette__search input")).toBeFocused();
   await page.keyboard.type("tva");
-  await expect(page.locator(".command-input input")).toHaveValue("tva");
+  await expect(page.locator(".wt-palette__search input")).toHaveValue("tva");
   await page.keyboard.press("Escape");
-  await expect(page.locator(".command-palette")).toHaveCount(0);
+  await expect(page.locator(".wt-palette")).toHaveCount(0);
 
   await page.locator(".topbar .primary-button").click();
   await expect(page.locator(".entry-modal")).toBeVisible({ timeout: 15000 });

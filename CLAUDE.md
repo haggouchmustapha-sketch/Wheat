@@ -63,6 +63,10 @@ npm run release:prepare -- --notes docs/wheat-<version>-release-notes.md --sign 
 npm run release:publish
 ```
 
+`release:prepare` builds the installer itself; add `--skip-build` to reuse one already in `release/<version>/`, and
+`--version <semver>` to bump (it rewrites `package.json`). `release:publish` uploads ~1.3 GB, so expect it to run well
+past any short command timeout — run it where it can finish.
+
 ## Architecture
 
 **Process split.** `electron/main.ts` is the privileged main process: it owns the Prisma/SQLite connection, all business logic, and file/OS access. `src/` is the React renderer — it never touches Prisma or the filesystem directly. The only bridge between them is `electron/preload.ts`, which exposes a flat `window.wheat` object of `ipcRenderer.invoke` calls (one method per IPC channel, channels named `wheat:<domain>:<action>`). When adding a feature: add/extend an IPC handler in the relevant `electron/*.ts` module, register it in `main.ts`, expose it in `preload.ts`, then call it from a component via `window.wheat`.
@@ -92,6 +96,10 @@ npm run release:publish
 that one repository, but a release binary is never a commit: `release/` is build output, installers reach users as
 release assets, and neither is committed. `docs/wheat-release-process.md` is the full runbook.
 
+Versions are `2.1.<YYMMDD><n>` — valid SemVer with the build date in the patch component, compared with `semver` and
+never as strings, so `2.10.0` is correctly newer than `2.9.0`. **2.1.260904 is the first release published this way**;
+anything newer must be greater than the newest published tag, which `release:prepare` checks against GitHub.
+
 *Where it is configured.* One place — the `repository` field of `package.json`. `electron/updater/releaseSource.ts`
 derives owner/repo/URLs for the application and `scripts/lib/releaseRepository.mjs` does the same for the tooling,
 so the two can never point at different repositories. Do not write the owner, the repo or a release URL anywhere else.
@@ -100,9 +108,14 @@ so the two can never point at different repositories. Do not write the owner, th
 into `electron/updater/signature.ts`; then SHA-256 and size over the downloaded bytes. GitHub is infrastructure, not
 authority — it serves the bytes and cannot choose them. The artifact URL is *built by Wheat* from the repository, the
 tag and the manifest's file name; a manifest never supplies a location. Redirects are followed only to GitHub's own
-download hosts. The key is empty until generated, and an empty key means every network update is refused — unconfigured
-fails closed. **No GitHub credential of any kind is ever compiled into Wheat.exe**; publishing uses the operator's own
-`gh` login on the release machine, and the Ed25519 private key lives outside the repository.
+download hosts. **No GitHub credential of any kind is ever compiled into Wheat.exe**; publishing uses the operator's own
+`gh` login on the release machine, and the Ed25519 private key lives outside the repository (`../wheat-release-key.pem`).
+
+The key is configured. If it is ever regenerated, paste the **whole PEM including the BEGIN/END lines** —
+`createPublicKey` rejects a bare base64 body, and it does so at runtime on the accountant's machine, where it reads as
+"every update refused" with nothing to point at. This has happened once. Two things now catch it before release:
+`tests/updater-signature.spec.cjs` fails if the compiled key is present but unusable, and `release:prepare` refuses to
+write a plan whose signature does not verify against that key. An empty key still fails closed.
 
 *Three decisions, never one.* `electron/updater/service.ts` deliberately separates check, download and install, because
 each is the accountant's call: a check may run unattended and downloads nothing; `downloadOfferedUpdate()` runs because
@@ -113,6 +126,16 @@ verifying → ready → installing → updated`, surfaced by `src/components/Whe
 `src/lib/updateStatus.ts`. Download progress is real transferred bytes; when no size was declared there is no percentage
 and no bar rather than an invented one. Before restarting, the renderer calls `flushAllFormDrafts()` from
 `src/lib/useFormDraft.ts` — the existing draft system, never a second one.
+
+*The tag must name the source that built the binary.* A release tag is a claim about which commit produced an
+installer, and an unverifiable claim is worse than none: it looks authoritative while misleading anyone trying to
+reproduce, debug, audit or roll back a build, and under the GPL it is the pointer to the corresponding source.
+`release:prepare` records HEAD, branch and cleanliness into `publish-plan.json` (`readSourceProvenance` in
+`scripts/lib/releaseRepository.mjs`); `release:publish` re-checks all of it and refuses unless the release was prepared
+inside a Git repository, from a clean tree, at a commit that is still HEAD, and that commit is already on remote `main`.
+`gh release create` is then given `--target <commit>` explicitly — without it GitHub tags whatever the default branch
+happens to point at when the request lands, which is exactly how a binary ends up tagged against source it did not come
+from. Local checks run before any network call, so a refusal never half-touches GitHub.
 
 *Failure is always survivable.* Update checking is auxiliary: no connection, an unreachable GitHub, a rate limit, a
 malformed manifest or a deleted release all leave Wheat completely usable, and an unattended check that could not reach
@@ -130,7 +153,22 @@ Publishing a release is a separate, explicit instruction ("Publish the Wheat upd
 tag, or publish a release merely because updater code changed. When told to publish: run `npm run release:prepare`
 with written release notes and the signing key, read the printed plan, then `npm run release:publish`. Publish fails
 closed on skipped tests, an unsigned manifest, a changed artifact, a signature the compiled-in key does not verify, an
-existing tag, or a version that is not newer.
+existing tag, a version that is not newer, or any break in source/tag correspondence. A rebuild alone is not a prepared
+release: `npm run installer` produces the installer and electron-builder's own `latest.yml`, which **Wheat's updater
+never reads** — the signed manifest Wheat does read is `latest.json`, and only `release:prepare` writes it.
+
+*What is not committed.* `npm run paddle:setup` fills `resources/paddleocr/runtime/` and `models/` with a portable
+Python interpreter and warmed OCR models — about 2.1 GB, reproducible from `requirements.txt`, and ignored (the sidecar's
+own README says so; `.gitignore` enforces it). `worker.py`, `xls_reader.py`, `requirements.txt` and `README.md` beside
+them *are* source. Also ignored: build and release output, local databases, and `/main.js`, a stray copy of the bundled
+main process that lands at the repo root during builds (the real entry point is `dist-electron/main.js`). Before a first
+commit in a fresh clone, check `git status` rather than trusting `git add -A`: ignore rules do not apply to paths already
+staged, so anything added before the rule existed stays staged until `git rm --cached` removes it.
+
+*Known cost.* The installer is ~1.3 GB, and `resources/paddleocr` is about two thirds of it. That was tolerable for a
+USB-stick install and is heavy as an update payload — every accountant downloads it in full, and GitHub's per-asset
+ceiling is 2 GB. The updater deliberately does not work around this (it verifies whole artifacts; a delta scheme would be
+a new trust surface). The fix belongs in packaging; `docs/wheat-release-process.md` lists the options.
 
 *Testing.* `npm run test:updater` covers the provider contracts (`updater-github`, `updater-https`), the signature
 (`updater-signature`), the service and Windows helper (`updater`), the release tooling's refusals

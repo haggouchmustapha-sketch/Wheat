@@ -108,9 +108,9 @@ test("a real Electron relaunch clears stale modal focus and restores keyboard in
     await globalSearch.fill("capital");
     await expect(globalSearch).toHaveValue("capital");
     await page.keyboard.press("Control+K");
-    await expect(page.locator(".command-input input")).toBeFocused();
+    await expect(page.locator(".wt-palette__search input")).toBeFocused();
     await page.keyboard.type("atlas 2.1");
-    await expect(page.locator(".command-input input")).toHaveValue("atlas 2.1");
+    await expect(page.locator(".wt-palette__search input")).toHaveValue("atlas 2.1");
     await page.keyboard.press("Escape");
 
     await page.locator(".wt-rail").getByRole("button", { name: "Comptes & états", exact: true }).click();

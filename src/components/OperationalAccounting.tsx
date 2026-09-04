@@ -30,9 +30,12 @@ import {
 } from "lucide-react";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
+import { reconciliationIssue } from "../lib/reconciliationIssues";
 import { useAccessibleDialog } from "../lib/useAccessibleDialog";
 import { useDraftedForm } from "../lib/useFormDraft";
+import type { WheatIssue } from "../lib/wheatIssues";
 import "./OperationalAccounting.css";
+import { IssueInfo } from "./ui";
 import { WheatSelect, type WheatSelectOption } from "./ui/WheatSelect";
 
 export type OperationalNoticeTone = "success" | "warning" | "error" | "info";
@@ -68,6 +71,15 @@ export interface ReconciliationWorkbenchProps {
   companyId: string;
   initialBankAccountId?: string;
   initialMovementId?: string;
+  /**
+   * The statement a person has just asked to reconcile.
+   *
+   * Reconciling is done a batch at a time. Landing on every movement the
+   * account has ever held makes the reader find the ones that arrived a
+   * moment ago; the desk opens on that file instead, and says which file it
+   * is showing so the whole account is one click away.
+   */
+  openBatch?: { bankAccountId: string; statementId: string };
   onImportStatement?: (bankAccountId: string) => Promise<void>;
   onChanged?: () => void | Promise<void>;
   onNotify?: (message: string, tone: OperationalNoticeTone) => void;
@@ -215,9 +227,35 @@ type CandidateLine = LooseRecord & {
   suggestedCents: string;
   signedLineCents: string;
   score: number;
+  /** Codes from `scoreCandidate` in `electron/reconciliation.ts`. */
+  matchReasons?: string[];
   entry: LooseRecord;
   account: LooseRecord;
 };
+
+/**
+ * The score in words.
+ *
+ * The percentage says how confident Wheat is; these say what that confidence
+ * rests on, which is what an accountant needs in order to disagree with it.
+ * An unrecognised code is dropped rather than shown raw — a suggestion is
+ * never explained by a word only a developer understands.
+ */
+const CANDIDATE_REASON_LABELS: Record<string, string> = {
+  AMOUNT_EXACT: "même montant",
+  AMOUNT_COVERS: "montant suffisant",
+  DATE_SAME_DAY: "même jour",
+  DATE_WITHIN_3_DAYS: "à 3 jours près",
+  DATE_WITHIN_10_DAYS: "à 10 jours près",
+  REFERENCE_MATCH: "référence trouvée",
+};
+
+function candidateReasonText(line: CandidateLine): string {
+  return (line.matchReasons ?? [])
+    .map((code) => CANDIDATE_REASON_LABELS[code])
+    .filter((label): label is string => Boolean(label))
+    .join(" · ");
+}
 
 type CandidateResponse = {
   movement: ReconciliationMovement;
@@ -240,8 +278,19 @@ function futureIso(days: number): string {
   return date.toISOString().slice(0, 10);
 }
 
+/*
+ * The sentence a person should read, without the transport it arrived over.
+ *
+ * Electron wraps anything a handler throws as "Error invoking remote method
+ * 'wheat:bank:movement:restore': Error: …". The channel name is plumbing: it
+ * belongs in the main-process log, not in front of an accountant, where it
+ * pushes the actual reason off the end of a one-line notice.
+ */
+const IPC_WRAPPER = /^Error invoking remote method '[^']*':\s*(?:[A-Za-z]*Error:\s*)*/;
+
 function textError(error: unknown): string {
-  return error instanceof Error ? error.message : "Une erreur inattendue est survenue.";
+  if (!(error instanceof Error)) return "Une erreur inattendue est survenue.";
+  return error.message.replace(IPC_WRAPPER, "").trim() || error.message;
 }
 
 function normalizeIntegerCents(value: unknown): string | null {
@@ -301,6 +350,38 @@ function formatExactCents(value: unknown, currency = "MAD"): string {
   const absolute = negative ? -cents : cents;
   const grouped = String(absolute / 100n).replace(/\B(?=(\d{3})+(?!\d))/g, "\u202f");
   return `${negative ? "−" : ""}${grouped},${String(absolute % 100n).padStart(2, "0")} ${currency}`;
+}
+
+/**
+ * The two money columns of a bank statement, restored from the one signed
+ * figure Wheat stores.
+ *
+ * A relevé has a Débit column and a Crédit column, and an accountant reads the
+ * one the amount sits in. Storing the movement as a single signed amount is the
+ * faithful record of which column the import read it from, but showing it that
+ * way asks the person to decode a minus sign to answer a question the source
+ * document already answered plainly.
+ *
+ * The sense is the statement's own — débit is money leaving the account, crédit
+ * money arriving. It is deliberately not the sense of the 514 ledger line facing
+ * it across the reconciliation, which is why the column header says whose sense
+ * it is rather than leaving the reader to assume.
+ */
+type StatementSide = "DEBIT" | "CREDIT";
+
+function statementSide(value: unknown): StatementSide | null {
+  const normalized = normalizeIntegerCents(value);
+  if (normalized === null) return null;
+  const cents = BigInt(normalized);
+  if (cents === 0n) return null;
+  return cents < 0n ? "DEBIT" : "CREDIT";
+}
+
+/** The amount as the statement prints it: a magnitude under a named column. */
+function statementColumnAmount(value: unknown, side: StatementSide, currency: string): string {
+  if (statementSide(value) !== side) return "—";
+  const cents = BigInt(normalizeIntegerCents(value) as string);
+  return formatExactCents((cents < 0n ? -cents : cents).toString(), currency);
 }
 
 function moneyFrom(record: LooseRecord | null | undefined, centsKey: string, decimalKey: string, currency = "MAD"): string {
@@ -368,16 +449,29 @@ function BusyButtonContent({ busy, children }: { busy: boolean; children: ReactN
   return busy ? <><LoaderCircle className="op-spin" size={15} /> Traitement…</> : <>{children}</>;
 }
 
+type OperationalNotice = { message: string; tone: OperationalNoticeTone; issue?: WheatIssue };
+
+/*
+ * A refusal, and the reason behind it.
+ *
+ * The domain services state a refusal in one short English sentence. Where the
+ * rule behind it is one Wheat can name, the notice carries the structured
+ * explanation with it, so the accountant gets the same information affordance
+ * here as on every checked list — what the rule is, why it exists and what to
+ * do — rather than a sentence to interpret. Unrecognised messages are shown
+ * exactly as before and explain nothing.
+ */
 function useOperationalNotice(onNotify?: OperationalAccountingProps["onNotify"]) {
-  const [notice, setNotice] = useState<{ message: string; tone: OperationalNoticeTone } | null>(null);
+  const [notice, setNotice] = useState<OperationalNotice | null>(null);
   const notify = useCallback((message: string, tone: OperationalNoticeTone) => {
-    setNotice({ message, tone });
-    onNotify?.(message, tone);
+    const issue = tone === "error" || tone === "warning" ? reconciliationIssue(message) ?? undefined : undefined;
+    setNotice({ message: issue?.message ?? message, tone, issue });
+    onNotify?.(issue?.message ?? message, tone);
   }, [onNotify]);
   return { notice, notify, clearNotice: () => setNotice(null) };
 }
 
-function OperationNotice({ notice, onClose }: { notice: { message: string; tone: OperationalNoticeTone } | null; onClose: () => void }) {
+function OperationNotice({ notice, onClose }: { notice: OperationalNotice | null; onClose: () => void }) {
   return (
     <AnimatePresence>
       {notice && (
@@ -389,6 +483,7 @@ function OperationNotice({ notice, onClose }: { notice: { message: string; tone:
           role={notice.tone === "error" ? "alert" : "status"}
         >
           <span>{notice.message}</span>
+          {notice.issue && <IssueInfo issue={notice.issue} />}
           <button type="button" onClick={onClose} aria-label="Fermer le message"><X size={15} /></button>
         </motion.div>
       )}
@@ -1701,19 +1796,46 @@ export function OperationalAccounting({
 }
 
 type InspectorIntent =
-  | { type: "confirm"; line: CandidateLine; amountCents: string; note: string }
+  | { type: "confirm"; line: CandidateLine; amountCents: string; paymentEvidence: Array<{ paymentId: string; amountCents: string }>; note: string }
   | { type: "void"; reconciliationId: string; reason: string }
   | { type: "exclude"; reason: string }
   | { type: "restore" }
   | null;
 
-export function ReconciliationWorkbench({ companyId, initialBankAccountId, initialMovementId, onImportStatement, onChanged, onNotify }: ReconciliationWorkbenchProps) {
+export function ReconciliationWorkbench({ companyId, initialBankAccountId, initialMovementId, openBatch, onImportStatement, onChanged, onNotify }: ReconciliationWorkbenchProps) {
   const [workspace, setWorkspace] = useState<ReconciliationWorkspace | null>(null);
-  const [bankAccountId, setBankAccountId] = useState(initialBankAccountId ?? "");
+  const [bankAccountId, setBankAccountId] = useState(openBatch?.bankAccountId ?? initialBankAccountId ?? "");
+  const [statementId, setStatementId] = useState(openBatch?.statementId ?? "");
   const [selectedMovementId, setSelectedMovementId] = useState(initialMovementId ?? "");
   const [candidates, setCandidates] = useState<CandidateResponse | null>(null);
   const [selectedLineId, setSelectedLineId] = useState("");
   const [allocationAmount, setAllocationAmount] = useState("");
+  /*
+   * Payments the accountant recognises as the reason this movement exists.
+   *
+   * A cheque or a transfer is normally recorded when it is written, days before
+   * the bank shows it. Attaching the payment to the movement is what closes that
+   * gap: the reconciliation then carries both the accounting line it allocated
+   * and the settlement it is evidence of, which is what makes a cheque
+   * "encaissé" rather than merely "saisi".
+   */
+  const [evidencePaymentIds, setEvidencePaymentIds] = useState<string[]>([]);
+  /*
+   * Suggestions the accountant has already looked at and ruled out.
+   *
+   * Ranking is a guess, and a wrong guess that keeps coming back on top costs
+   * more attention every time the movement is reopened. A rejection is a
+   * decision about one accounting line, not an accounting fact: nothing is
+   * posted from it and it is not audit-chained, so it belongs in this
+   * movement's review draft alongside the note and the chosen amount — which
+   * already persists per movement, per dossier, and across restarts.
+   *
+   * Nothing is hidden irreversibly: the count and a "Réafficher" control are
+   * always on screen while any rejection is in force.
+   */
+  const [rejectedLineIds, setRejectedLineIds] = useState<string[]>([]);
+  /** Reaches a correct line that scored badly; searches only what was loaded. */
+  const [candidateQuery, setCandidateQuery] = useState("");
   const [note, setNote] = useState("");
   const [reason, setReason] = useState("");
   const [query, setQuery] = useState("");
@@ -1769,6 +1891,19 @@ export function ReconciliationWorkbench({ companyId, initialBankAccountId, initi
 
   useEffect(() => { void loadWorkspace(initialMovementId); }, [initialMovementId, loadWorkspace]);
 
+  /*
+   * A statement import is started from this screen, so the desk is already
+   * open when the person chooses to reconcile what they imported. The batch
+   * is applied when it arrives rather than only at mount, which is the
+   * difference between the filter working and the request being ignored.
+   */
+  useEffect(() => {
+    if (!openBatch) return;
+    setBankAccountId(openBatch.bankAccountId);
+    setStatementId(openBatch.statementId);
+    setStatusFilter("OPEN");
+  }, [openBatch]);
+
   const selectedMovement = workspace?.movements.find((movement) => movement.id === selectedMovementId) ?? null;
 
   /*
@@ -1788,10 +1923,12 @@ export function ReconciliationWorkbench({ companyId, initialBankAccountId, initi
     entity: "reconciliation.review",
     draftKey: selectedMovementId || "none",
     open: Boolean(selectedMovementId),
-    value: { selectedLineId, allocationAmount, note, reason },
+    value: { selectedLineId, allocationAmount, evidencePaymentIds, rejectedLineIds, note, reason },
     onRestore: (payload) => {
       if (typeof payload.selectedLineId === "string") setSelectedLineId(payload.selectedLineId);
       if (typeof payload.allocationAmount === "string") setAllocationAmount(payload.allocationAmount);
+      if (Array.isArray(payload.evidencePaymentIds)) setEvidencePaymentIds(payload.evidencePaymentIds.filter((item): item is string => typeof item === "string"));
+      if (Array.isArray(payload.rejectedLineIds)) setRejectedLineIds(payload.rejectedLineIds.filter((item): item is string => typeof item === "string"));
       if (typeof payload.note === "string") setNote(payload.note);
       if (typeof payload.reason === "string") setReason(payload.reason);
     },
@@ -1802,6 +1939,9 @@ export function ReconciliationWorkbench({ companyId, initialBankAccountId, initi
     setSelectedMovementId(movement.id);
     setSelectedLineId("");
     setAllocationAmount("");
+    setEvidencePaymentIds([]);
+    setRejectedLineIds([]);
+    setCandidateQuery("");
     setNote("");
     setReason("");
     setIntent(null);
@@ -1833,14 +1973,76 @@ export function ReconciliationWorkbench({ companyId, initialBankAccountId, initi
 
   const filteredMovements = useMemo(() => (workspace?.movements ?? []).filter((movement) => {
     if (bankAccountId && movement.bankAccountId !== bankAccountId) return false;
+    if (statementId && String(movement.statementId ?? "") !== statementId) return false;
     if (statusFilter === "OPEN" && !["UNRECONCILED", "PARTIAL", "REVIEW_REQUIRED"].includes(movement.reconciliation.status)) return false;
     if (statusFilter !== "ALL" && statusFilter !== "OPEN" && movement.reconciliation.status !== statusFilter) return false;
     return rowMatchesSearch([movement.reference, movement.label, movement.amountCents, movement.date], query);
-  }), [bankAccountId, query, statusFilter, workspace]);
+  }), [bankAccountId, query, statementId, statusFilter, workspace]);
 
-  const selectedLine = candidates?.entryLines.find((line) => line.id === selectedLineId) ?? null;
+  /*
+   * A ruled-out line is not a selection, however it came to be selected —
+   * including a restored draft landing after the candidate list has already
+   * defaulted to the top-scoring row. Deriving it here means the allocation
+   * form can never offer a line the list is hiding.
+   */
+  const selectedLine = candidates?.entryLines.find((line) => line.id === selectedLineId && !rejectedLineIds.includes(line.id)) ?? null;
+  /*
+   * What the list actually offers: everything loaded, minus what was ruled
+   * out, minus what the search excludes. The selection is deliberately not
+   * bound to this list — filtering the list is a way of looking, not a way of
+   * changing one's mind, so typing a query never silently drops the line
+   * somebody already chose. Rejecting one does, because that is a decision.
+   */
+  const allCandidates = candidates?.entryLines ?? [];
+  const rejectedCount = allCandidates.filter((line) => rejectedLineIds.includes(line.id)).length;
+  const visibleCandidates = useMemo(() => allCandidates.filter((line) => {
+    if (rejectedLineIds.includes(line.id)) return false;
+    return rowMatchesSearch([line.entry.number, line.entry.pieceNumber, line.entry.label, line.label, line.account.code, line.availableCents], candidateQuery);
+  }), [allCandidates, candidateQuery, rejectedLineIds]);
+
+  const rejectCandidate = (lineId: string) => {
+    setRejectedLineIds((current) => (current.includes(lineId) ? current : [...current, lineId]));
+    setIntent(null);
+    if (lineId !== selectedLineId) return;
+    // The chosen line is the one being ruled out, so the choice goes with it.
+    const next = visibleCandidates.find((line) => line.id !== lineId) ?? null;
+    setSelectedLineId(next?.id ?? "");
+    setAllocationAmount(next ? centsToDecimal(next.suggestedCents) : "");
+  };
+
+  const evidenceCandidates = candidates?.paymentEvidence ?? [];
+  /*
+   * Evidence never exceeds the allocation it evidences — the domain refuses a
+   * batch where it does, so the amounts are capped here rather than letting the
+   * person compose a batch that will be rejected on confirmation. Each ticked
+   * payment takes what is left of the batch, up to what the payment still has
+   * available.
+   */
+  const evidenceAllocations = useMemo(() => {
+    const batch = decimalToCents(allocationAmount);
+    if (batch === null) return [] as Array<{ paymentId: string; amountCents: string }>;
+    let remaining = BigInt(batch);
+    const chosen: Array<{ paymentId: string; amountCents: string }> = [];
+    for (const paymentId of evidencePaymentIds) {
+      if (remaining <= 0n) break;
+      const payment = evidenceCandidates.find((item) => String(item.id) === paymentId);
+      const available = normalizeIntegerCents(payment?.availableEvidenceCents);
+      if (!payment || available === null) continue;
+      const take = BigInt(available) < remaining ? BigInt(available) : remaining;
+      if (take <= 0n) continue;
+      chosen.push({ paymentId, amountCents: take.toString() });
+      remaining -= take;
+    }
+    return chosen;
+  }, [allocationAmount, evidenceCandidates, evidencePaymentIds]);
   const selectedAccount = workspace?.accounts.find((account) => account.id === bankAccountId);
+  const activeStatement = statementId
+    ? (selectedAccount?.statements ?? []).find((statement: LooseRecord) => String(statement.id) === statementId) ?? null
+    : null;
   const currency = selectedAccount?.currency ?? "MAD";
+  /* A row belongs to its own account: the filter may be "all accounts". */
+  const movementCurrency = (movement: ReconciliationMovement) =>
+    workspace?.accounts.find((account) => account.id === movement.bankAccountId)?.currency ?? "MAD";
   const activeReconciliations = (selectedMovement?.reconciliations ?? []).filter((reconciliation) => reconciliation.status === "ACTIVE");
 
   const refreshAfterAction = async (message: string) => {
@@ -1861,7 +2063,7 @@ export function ReconciliationWorkbench({ companyId, initialBankAccountId, initi
     if (BigInt(amountCents) > BigInt(selectedLine.availableCents) || BigInt(amountCents) > BigInt(selectedMovement.reconciliation.remainingCents)) {
       return notify("Le montant dépasse la capacité disponible de la ligne ou du mouvement.", "error");
     }
-    setIntent({ type: "confirm", line: selectedLine, amountCents, note });
+    setIntent({ type: "confirm", line: selectedLine, amountCents, paymentEvidence: evidenceAllocations, note });
   };
 
   const executeIntent = async () => {
@@ -1875,6 +2077,7 @@ export function ReconciliationWorkbench({ companyId, initialBankAccountId, initi
           movementId: selectedMovement.id,
           expectedRevision: selectedMovement.revision,
           allocations: [{ entryLineId: intent.line.id, amountCents: intent.amountCents }],
+          paymentEvidence: intent.paymentEvidence.length ? intent.paymentEvidence : undefined,
           note: intent.note || undefined,
         });
         await refreshAfterAction("Allocation confirmée. Le statut du mouvement a été recalculé.");
@@ -1958,7 +2161,7 @@ export function ReconciliationWorkbench({ companyId, initialBankAccountId, initi
           searchPlaceholder="Banque ou IBAN…"
           noOptionsLabel="Aucun compte bancaire"
           value={bankAccountId}
-          onChange={(value) => { setBankAccountId(value); closeInspector(); }}
+          onChange={(value) => { setBankAccountId(value); setStatementId(""); closeInspector(); }}
           options={[
             { value: "", label: "Tous les comptes", note: "Aucune restriction" },
             ...(workspace?.accounts ?? []).map((account): WheatSelectOption => ({
@@ -1973,6 +2176,19 @@ export function ReconciliationWorkbench({ companyId, initialBankAccountId, initi
         <label className="op-compact-select"><span>État</span><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="OPEN">À traiter</option><option value="UNRECONCILED">Non rapproché</option><option value="PARTIAL">Partiel</option><option value="REVIEW_REQUIRED">Contrôle requis</option><option value="RECONCILED">Rapproché</option><option value="EXCLUDED">Exclu</option><option value="ALL">Tous</option></select></label>
         <span className="op-result-count">{filteredMovements.length} mouvement(s)</span>
       </div>
+
+      {activeStatement && (
+        <div className="op-batch-banner" role="status">
+          <FileClock size={16} />
+          <div>
+            <strong>Relevé « {String(activeStatement.sourceName)} »</strong>
+            <span>{filteredMovements.length} mouvement(s) affiché(s) sur les {String(activeStatement.importedCount ?? activeStatement.rowCount ?? "?")} de ce relevé.</span>
+          </div>
+          <button type="button" className="op-text-action" onClick={() => { setStatementId(""); closeInspector(); }}>
+            Voir tout le compte
+          </button>
+        </div>
+      )}
 
       {selectedAccount && (selectedAccount.statements?.length ?? 0) > 0 && (
         <section className="op-import-history" aria-label="Historique des imports bancaires">
@@ -1996,11 +2212,12 @@ export function ReconciliationWorkbench({ companyId, initialBankAccountId, initi
         <div className="op-table-wrap op-recon-table-wrap">
           {loading ? <div className="op-loading"><LoaderCircle className="op-spin" size={20} /> Chargement des mouvements…</div> : filteredMovements.length ? (
             <table className="op-table op-recon-table">
-              <thead><tr><th>Date</th><th>Référence</th><th>Libellé</th><th className="op-number">Montant</th><th className="op-number">Alloué</th><th className="op-number">Reste</th><th>État</th><th /></tr></thead>
+              <thead><tr><th>Date</th><th>Référence</th><th>Libellé</th><th className="op-number" title="Sens du relevé bancaire : sorties du compte">Débit</th><th className="op-number" title="Sens du relevé bancaire : entrées sur le compte">Crédit</th><th className="op-number">Alloué</th><th className="op-number">Reste</th><th>État</th><th /></tr></thead>
               <tbody>{filteredMovements.map((movement) => (
                 <tr key={movement.id} className={`${selectedMovementId === movement.id ? "is-selected" : ""} ${movement.reconciliation.status === "REVIEW_REQUIRED" ? "is-review" : ""}`} onClick={() => void loadCandidates(movement)}>
                   <td>{formatDate(movement.date)}</td><td><strong className="op-primary-cell">{movement.reference || "—"}</strong>{movement.statementRow && <small>Ligne {movement.statementRow}</small>}</td><td className="op-label-cell">{movement.label}</td>
-                  <td className={`op-number ${BigInt(movement.amountCents) < 0n ? "is-outflow" : "is-inflow"}`}><strong>{formatExactCents(movement.amountCents, workspace?.accounts.find((account) => account.id === movement.bankAccountId)?.currency ?? "MAD")}</strong></td>
+                  <td className="op-number is-outflow">{statementSide(movement.amountCents) === "DEBIT" ? <strong>{statementColumnAmount(movement.amountCents, "DEBIT", movementCurrency(movement))}</strong> : <span className="op-blank-cell">—</span>}</td>
+                  <td className="op-number is-inflow">{statementSide(movement.amountCents) === "CREDIT" ? <strong>{statementColumnAmount(movement.amountCents, "CREDIT", movementCurrency(movement))}</strong> : <span className="op-blank-cell">—</span>}</td>
                   <td className="op-number">{formatExactCents(movement.reconciliation.allocatedCents, currency)}</td><td className="op-number">{formatExactCents(movement.reconciliation.remainingCents, currency)}</td>
                   <td><StatusBadge status={movement.reconciliation.status} /></td><td><ChevronRight size={15} /></td>
                 </tr>
@@ -2018,8 +2235,16 @@ export function ReconciliationWorkbench({ companyId, initialBankAccountId, initi
                 <div className="op-movement-summary">
                   <div><span>{formatDate(selectedMovement.date)}</span><StatusBadge status={selectedMovement.reconciliation.status} /></div>
                   <p>{selectedMovement.label}</p>
-                  <strong className={BigInt(selectedMovement.amountCents) < 0n ? "is-outflow" : "is-inflow"}>{formatExactCents(selectedMovement.amountCents, currency)}</strong>
-                  <dl><div><dt>Alloué</dt><dd>{formatExactCents(selectedMovement.reconciliation.allocatedCents, currency)}</dd></div><div><dt>Reste</dt><dd>{formatExactCents(selectedMovement.reconciliation.remainingCents, currency)}</dd></div><div><dt>Révision</dt><dd>v{selectedMovement.revision}</dd></div></dl>
+                  <strong className={statementSide(selectedMovement.amountCents) === "DEBIT" ? "is-outflow" : "is-inflow"}>
+                    {statementSide(selectedMovement.amountCents) === "DEBIT" ? "Débit" : "Crédit"} {statementColumnAmount(selectedMovement.amountCents, statementSide(selectedMovement.amountCents) ?? "CREDIT", currency)}
+                  </strong>
+                  <dl>
+                    <div><dt>Sens du relevé</dt><dd>{statementSide(selectedMovement.amountCents) === "DEBIT" ? "Débit — sortie du compte" : "Crédit — entrée sur le compte"}</dd></div>
+                    {selectedMovement.valueDate ? <div><dt>Date de valeur</dt><dd>{formatDate(selectedMovement.valueDate)}</dd></div> : null}
+                    <div><dt>Alloué</dt><dd>{formatExactCents(selectedMovement.reconciliation.allocatedCents, currency)}</dd></div>
+                    <div><dt>Reste à rapprocher</dt><dd>{formatExactCents(selectedMovement.reconciliation.remainingCents, currency)}</dd></div>
+                    <div><dt>Révision</dt><dd>v{selectedMovement.revision}</dd></div>
+                  </dl>
                 </div>
 
                 {selectedMovement.reconciliation.status === "REVIEW_REQUIRED" && <div className="op-inspector-alert"><AlertTriangle size={16} /><span>L’ancien statut n’est pas une preuve de rapprochement. Sélectionnez une ligne comptable réelle.</span></div>}
@@ -2032,20 +2257,74 @@ export function ReconciliationWorkbench({ companyId, initialBankAccountId, initi
                 ) : (
                   <>
                     <div className="op-inspector-section">
-                      <div className="op-section-title"><div><strong>Lignes comptables candidates</strong><span>Compte bancaire associé · écritures comptabilisées</span></div><small>{candidates?.entryLines.length ?? 0}</small></div>
-                      {candidateLoading ? <div className="op-loading op-loading--small"><LoaderCircle className="op-spin" size={17} /> Recherche…</div> : candidates?.entryLines.length ? <div className="op-candidates">{candidates.entryLines.map((line) => (
-                        <button key={line.id} type="button" className={selectedLineId === line.id ? "is-selected" : ""} onClick={() => { setSelectedLineId(line.id); setAllocationAmount(centsToDecimal(line.suggestedCents)); setIntent(null); }}>
-                          <span className="op-radio-mark">{selectedLineId === line.id && <span />}</span><span className="op-candidate-copy"><strong>{line.entry.number} · {line.entry.pieceNumber}</strong><small>{formatDate(line.entry.date)} · {line.label}</small><em>{line.account.code} · disponible {formatExactCents(line.availableCents, currency)}</em></span><span className="op-score">{line.score}%</span>
-                        </button>
-                      ))}</div> : <p className="op-inspector-empty">Aucune ligne compatible. Vérifiez l’association du compte bancaire et les écritures comptabilisées.</p>}
+                      <div className="op-section-title"><div><strong>Lignes comptables candidates</strong><span>Compte bancaire associé · écritures comptabilisées</span></div><small>{visibleCandidates.length}</small></div>
+                      {candidateLoading ? <div className="op-loading op-loading--small"><LoaderCircle className="op-spin" size={17} /> Recherche de rapprochements possibles…</div> : allCandidates.length ? (
+                        <>
+                          <label className="op-search op-search--inset"><Search size={14} /><input value={candidateQuery} onChange={(event) => setCandidateQuery(event.target.value)} placeholder="Chercher une écriture (n°, pièce, libellé, compte)…" />{candidateQuery && <button type="button" onClick={() => setCandidateQuery("")} aria-label="Effacer la recherche d’écriture"><X size={13} /></button>}</label>
+                          {rejectedCount > 0 && (
+                            <p className="op-candidate-rejected">
+                              <span>{rejectedCount} suggestion(s) écartée(s)</span>
+                              <button type="button" onClick={() => { setRejectedLineIds([]); setIntent(null); }}>Réafficher</button>
+                            </p>
+                          )}
+                          {visibleCandidates.length ? <div className="op-candidates">{visibleCandidates.map((line) => {
+                            const reasons = candidateReasonText(line);
+                            return (
+                              <div key={line.id} className={`op-candidate-row${selectedLineId === line.id ? " is-selected" : ""}`}>
+                                <button type="button" className="op-candidate-pick" onClick={() => { setSelectedLineId(line.id); setAllocationAmount(centsToDecimal(line.suggestedCents)); setIntent(null); }}>
+                                  <span className="op-radio-mark">{selectedLineId === line.id && <span />}</span>
+                                  <span className="op-candidate-copy"><strong>{line.entry.number} · {line.entry.pieceNumber}</strong><small>{formatDate(line.entry.date)} · {line.label}</small><em>{line.account.code} · disponible {formatExactCents(line.availableCents, currency)}</em>{reasons && <span className="op-candidate-reasons">{reasons}</span>}</span>
+                                  <span className="op-score">{line.score}%</span>
+                                </button>
+                                <button type="button" className="op-icon-button op-candidate-reject" onClick={() => rejectCandidate(line.id)} title={`Écarter ${String(line.entry.number ?? "cette suggestion")}`} aria-label={`Écarter la suggestion ${String(line.entry.number ?? "")}`}><X size={14} /></button>
+                              </div>
+                            );
+                          })}</div> : <p className="op-inspector-empty">{candidateQuery ? "Aucune écriture chargée ne correspond à cette recherche." : "Toutes les suggestions ont été écartées. Réaffichez-les pour en choisir une."}</p>}
+                        </>
+                      ) : <p className="op-inspector-empty">Aucune ligne compatible. Vérifiez l’association du compte bancaire et les écritures comptabilisées.</p>}
                     </div>
+
+                    {evidenceCandidates.length > 0 && selectedMovement.reconciliation.status !== "RECONCILED" && (
+                      <div className="op-inspector-section">
+                        <div className="op-section-title"><div><strong>Règlements correspondants</strong><span>Chèques, virements et espèces déjà saisis, non encore rapprochés</span></div><small>{evidenceCandidates.length}</small></div>
+                        <div className="op-candidates op-evidence">
+                          {evidenceCandidates.map((payment) => {
+                            const paymentId = String(payment.id);
+                            const checked = evidencePaymentIds.includes(paymentId);
+                            const retained = evidenceAllocations.find((item) => item.paymentId === paymentId);
+                            return (
+                              <label key={paymentId} className={checked ? "is-selected" : ""}>
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={(event) => {
+                                    setEvidencePaymentIds((current) => (event.target.checked ? [...current, paymentId] : current.filter((item) => item !== paymentId)));
+                                    setIntent(null);
+                                  }}
+                                />
+                                <span className="op-candidate-copy">
+                                  <strong>{String(payment.method ?? "Règlement")}{payment.reference ? ` · ${String(payment.reference)}` : ""}</strong>
+                                  <small>{formatDate(payment.paymentDate)} · {String((payment.counterparty as LooseRecord | undefined)?.name ?? "Tiers non nommé")}</small>
+                                  <em>disponible {formatExactCents(payment.availableEvidenceCents, currency)}{retained ? ` · retenu ${formatExactCents(retained.amountCents, currency)}` : ""}</em>
+                                </span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                        <p className="op-inspector-hint">
+                          Rattacher un règlement rapproche le chèque ou le virement de son mouvement bancaire. Le montant retenu ne dépasse jamais l’allocation comptable ci-dessous.
+                        </p>
+                      </div>
+                    )}
 
                     {selectedLine && selectedMovement.reconciliation.status !== "RECONCILED" && (
                       <div className="op-inspector-section op-allocation-form">
+                        {/* Named here because the search box above can hide the chosen row. */}
+                        <p className="op-allocation-target">Ligne retenue · <strong>{String(selectedLine.entry.number ?? "")}</strong> · {selectedLine.label}</p>
                         <label className="op-field"><span>Montant à allouer ({currency})</span><input inputMode="decimal" value={allocationAmount} onChange={(event) => { setAllocationAmount(event.target.value); setIntent(null); }} placeholder="0.00" /></label>
                         <div className="op-cent-preview"><span>Montant exact</span><strong>{decimalToCents(allocationAmount) ? formatExactCents(decimalToCents(allocationAmount), currency) : "—"}</strong></div>
                         <label className="op-field"><span>Note d’audit <em>facultatif</em></span><textarea rows={2} value={note} onChange={(event) => { setNote(event.target.value); setIntent(null); }} placeholder="Justification ou référence complémentaire" /></label>
-                        {intent?.type === "confirm" ? <ConfirmationBox title="Confirmer cette allocation ?" detail={`${formatExactCents(intent.amountCents, currency)} sera affecté à ${intent.line.entry.number}. Cette opération crée un lot de rapprochement auditable.`} busy={busy} onCancel={() => setIntent(null)} onConfirm={() => void executeIntent()} /> : <button type="button" className="op-button op-button--primary op-button--full" onClick={reviewConfirm}><ShieldCheck size={15} /> Examiner l’allocation</button>}
+                        {intent?.type === "confirm" ? <ConfirmationBox title="Confirmer cette allocation ?" detail={`${formatExactCents(intent.amountCents, currency)} sera affecté à ${intent.line.entry.number}${intent.paymentEvidence.length ? `, avec ${intent.paymentEvidence.length} règlement(s) rattaché(s) comme preuve` : ""}. Cette opération crée un lot de rapprochement auditable.`} busy={busy} onCancel={() => setIntent(null)} onConfirm={() => void executeIntent()} /> : <button type="button" className="op-button op-button--primary op-button--full" onClick={reviewConfirm}><ShieldCheck size={15} /> Examiner l’allocation</button>}
                       </div>
                     )}
 

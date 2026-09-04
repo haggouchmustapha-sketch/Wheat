@@ -691,21 +691,55 @@ function paymentDirection(kind: unknown): 1 | -1 | 0 {
   return 0;
 }
 
-function candidateScore(movement: any, line: any, remaining: bigint): number {
+/**
+ * Why a suggestion is a suggestion.
+ *
+ * A bare "85 %" is a number the accountant is asked to trust. These are the
+ * facts the number is computed from, so a suggestion can be judged instead of
+ * believed. They are produced by the same pass that produces the score, which
+ * is what stops the shown reasons and the ranking from ever disagreeing.
+ *
+ * Codes, not sentences: the wording belongs to the screen that shows them.
+ */
+export type CandidateMatchReason =
+  | "AMOUNT_EXACT"
+  | "AMOUNT_COVERS"
+  | "DATE_SAME_DAY"
+  | "DATE_WITHIN_3_DAYS"
+  | "DATE_WITHIN_10_DAYS"
+  | "REFERENCE_MATCH";
+
+function scoreCandidate(movement: any, line: any, remaining: bigint): { score: number; reasons: CandidateMatchReason[] } {
   let score = 0;
+  const reasons: CandidateMatchReason[] = [];
   const movementMagnitude = magnitude(BigInt(movement.amountCents));
-  if (remaining === movementMagnitude) score += 60;
-  else if (remaining >= movementMagnitude) score += 25;
+  if (remaining === movementMagnitude) {
+    score += 60;
+    reasons.push("AMOUNT_EXACT");
+  } else if (remaining >= movementMagnitude) {
+    score += 25;
+    reasons.push("AMOUNT_COVERS");
+  }
   const movementDay = new Date(movement.date).getTime();
   const entryDay = new Date(line.entry.date).getTime();
   const dayDifference = Math.abs(Math.round((movementDay - entryDay) / 86_400_000));
-  if (dayDifference === 0) score += 25;
-  else if (dayDifference <= 3) score += 15;
-  else if (dayDifference <= 10) score += 5;
+  if (dayDifference === 0) {
+    score += 25;
+    reasons.push("DATE_SAME_DAY");
+  } else if (dayDifference <= 3) {
+    score += 15;
+    reasons.push("DATE_WITHIN_3_DAYS");
+  } else if (dayDifference <= 10) {
+    score += 5;
+    reasons.push("DATE_WITHIN_10_DAYS");
+  }
   const haystack = normalizedFingerprintText(`${line.entry.pieceNumber} ${line.entry.label} ${line.label}`);
   const reference = normalizedFingerprintText(movement.reference);
-  if (reference && haystack.includes(reference)) score += 15;
-  return Math.min(score, 100);
+  if (reference && haystack.includes(reference)) {
+    score += 15;
+    reasons.push("REFERENCE_MATCH");
+  }
+  return { score: Math.min(score, 100), reasons };
 }
 
 export function createReconciliationService(prisma: DbLike, options: ReconciliationServiceOptions = {}) {
@@ -762,12 +796,14 @@ export function createReconciliationService(prisma: DbLike, options: Reconciliat
       const used = (line.bankReconciliationAllocations ?? []).reduce((sum: bigint, item: any) => sum + BigInt(item.amountCents), 0n);
       const remaining = magnitude(net) > used ? magnitude(net) - used : 0n;
       if (remaining <= 0n) return [];
+      const match = scoreCandidate(movement, line, remaining);
       return [{
         ...transport(line),
         signedLineCents: net.toString(),
         availableCents: remaining.toString(),
         suggestedCents: (remaining < activeState.remaining ? remaining : activeState.remaining).toString(),
-        score: candidateScore(movement, line, remaining),
+        score: match.score,
+        matchReasons: match.reasons,
       }];
     }).sort((left: any, right: any) => right.score - left.score);
 

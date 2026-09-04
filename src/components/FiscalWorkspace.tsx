@@ -756,17 +756,69 @@ function WheatAiActionCard({ proposal, busy, onResolve }: { proposal: Loose; bus
   </div>;
 }
 
+/**
+ * The answer to what was asked, with the machinery behind a disclosure.
+ *
+ * A capability card used to lead with its own identifier and the word
+ * "Terminée", which told the accountant that Wheat had done something and
+ * not what it found. The presentation the main process derives from the
+ * result is the answer; the capability identifier, the affected records and
+ * the failure text are execution detail and sit under « Détails d'exécution ».
+ */
 function WheatAiResultCard({ item, onNavigate }: { item: Loose; onNavigate?: (target: string, entityId?: string | null) => void }) {
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const status = String(item.status ?? "SUCCEEDED");
   const navigation = item.result?.navigation as Loose | undefined;
   const affected = Array.isArray(item.affectedRecords) ? item.affectedRecords : [];
   const category = String(item.capabilityId ?? "").split(".")[0];
+  const presentation = item.userPresentation as Loose | undefined;
+  const tables = Array.isArray(presentation?.tables) ? presentation.tables as Loose[] : [];
+  const facts = Array.isArray(presentation?.facts) ? presentation.facts as Loose[] : [];
   const affectedTarget: Record<string, string> = { accounts: "settings", journals: "settings", "fiscal-years": "settings", company: "settings", settings: "settings", entries: "entries", subledger: "invoices", invoices: "invoices", payments: "invoices", banking: "banking", documents: "documents", vat: "vat", fiscal: "fiscal", imports: "entries", payroll: "entries" };
   const viewTarget = navigation?.target ? String(navigation.target) : affected[0] && affectedTarget[category];
   const viewEntityId = navigation?.entityId ? String(navigation.entityId) : affected[0]?.id ? String(affected[0].id) : null;
+  const statusLabel = status === "PENDING_CONFIRMATION" ? "Confirmation requise" : status === "DRY_RUN" ? "Prévisualisée" : status === "SUCCEEDED" ? "Terminée" : String(item.error ?? "Action non exécutée");
+  // A failure has no answer to show, so its message stays in the primary line.
+  const headline = presentation && status === "SUCCEEDED" ? String(presentation.title ?? "") : String(item.capabilityId ?? "Action Wheat AI");
+  const subline = presentation && status === "SUCCEEDED" ? String(presentation.summary ?? "") : statusLabel;
   return <div className={`wheat-ai-result ${status.toLowerCase()}`}>
     <span>{status === "SUCCEEDED" ? <CheckCircle2 size={15} /> : status === "DRY_RUN" || status === "PENDING_CONFIRMATION" ? <Sparkles size={15} /> : <AlertTriangle size={15} />}</span>
-    <div><strong>{String(item.capabilityId ?? "Action Wheat AI")}</strong><small>{status === "SUCCEEDED" ? "Terminée" : status === "PENDING_CONFIRMATION" ? "Confirmation requise" : status === "DRY_RUN" ? "Prévisualisée" : String(item.error ?? "Action non exécutée")}</small>{affected.slice(0, 4).map((record: Loose, index: number) => <p key={index}>{String(record.label ?? record.id ?? "Enregistrement affecté")}</p>)}</div>
+    <div className="wheat-ai-result__body">
+      <strong>{headline}</strong>
+      {subline && <small>{subline}</small>}
+      {facts.length > 0 && (
+        <dl className="wheat-ai-result__facts">
+          {facts.map((fact, index) => <div key={index}><dt>{String(fact.label)}</dt><dd>{String(fact.value)}</dd></div>)}
+        </dl>
+      )}
+      {tables.map((table, tableIndex) => {
+        const columns = Array.isArray(table.columns) ? table.columns as Loose[] : [];
+        const rows = Array.isArray(table.rows) ? table.rows as Array<Record<string, string>> : [];
+        const total = Number(table.totalRows ?? rows.length);
+        return (
+          <div className="wheat-ai-result__table" key={tableIndex}>
+            <table>
+              <thead><tr>{columns.map((column) => <th key={String(column.key)} className={column.numeric ? "is-numeric" : undefined}>{String(column.label)}</th>)}</tr></thead>
+              <tbody>
+                {rows.map((row, rowIndex) => (
+                  <tr key={rowIndex}>{columns.map((column) => <td key={String(column.key)} className={column.numeric ? "is-numeric" : undefined}>{row[String(column.key)] ?? ""}</td>)}</tr>
+                ))}
+              </tbody>
+            </table>
+            {total > rows.length && <small className="wheat-ai-result__more">{rows.length} lignes affichées sur {total}. Ouvrez l'écran correspondant pour les consulter toutes.</small>}
+          </div>
+        );
+      })}
+      <button type="button" className="wheat-ai-result__disclosure" aria-expanded={detailsOpen} onClick={() => setDetailsOpen((current) => !current)}>
+        Détails d'exécution
+      </button>
+      {detailsOpen && (
+        <div className="wheat-ai-result__technical">
+          <p>{String(item.capabilityId ?? "")} · {statusLabel}</p>
+          {affected.slice(0, 4).map((record: Loose, index: number) => <p key={index}>{String(record.label ?? record.id ?? "Enregistrement affecté")}</p>)}
+        </div>
+      )}
+    </div>
     {viewTarget && onNavigate && <button type="button" onClick={() => onNavigate(viewTarget, viewEntityId)}>Ouvrir</button>}
   </div>;
 }

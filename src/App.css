@@ -738,7 +738,6 @@
 .action-bar,
 .filter-row,
 .status-line,
-.command-input,
 .chat-input,
 .setting-row,
 .setting-toggle {
@@ -851,7 +850,6 @@
 .topbar select,
 .sidebar button,
 .modal-backdrop,
-.command-palette,
 .entry-modal {
   -webkit-app-region: no-drag;
 }
@@ -899,8 +897,7 @@
 label input:focus,
 label select:focus,
 .line-row input:focus,
-.line-row select:focus,
-.command-input:focus-within {
+.line-row select:focus {
   border-color: rgb(var(--primary-rgb) / 0.64);
   box-shadow: 0 0 0 3px rgb(var(--primary-rgb) / 0.12);
 }
@@ -3152,8 +3149,7 @@ pre {
   height: 48px;
 }
 
-.entry-modal,
-.command-palette {
+.entry-modal {
   width: min(920px, calc(100vw - 36px));
   max-height: calc(100vh - 36px);
   overflow: auto;
@@ -3513,54 +3509,6 @@ label select,
 .form-error {
   margin: 10px 0 0;
   font-size: 13px;
-}
-
-.command-backdrop {
-  align-items: start;
-  padding-top: 110px;
-}
-
-.command-palette {
-  width: min(640px, calc(100vw - 36px));
-  padding: 10px;
-}
-
-.command-input {
-  gap: 10px;
-  height: 48px;
-  padding: 0 10px;
-  border-bottom: 1px solid var(--line);
-}
-
-.command-input input {
-  flex: 1;
-  border: 0;
-  outline: 0;
-  color: var(--text);
-  background: transparent;
-}
-
-.command-input span {
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.command-palette > button {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  height: 42px;
-  border: 0;
-  border-radius: 7px;
-  padding: 0 10px;
-  color: var(--text);
-  background: transparent;
-  text-align: left;
-}
-
-.command-palette > button:hover {
-  background: var(--blue-soft);
 }
 
 .command-empty {
@@ -4106,8 +4054,7 @@ label select,
 .document-card,
 .report-card,
 .upload-zone,
-.entry-modal,
-.command-palette {
+.entry-modal {
   border-radius: var(--radius);
 }
 
@@ -4311,7 +4258,6 @@ pre[tabindex="0"]:focus-visible,
 }
 
 .entry-modal,
-.command-palette,
 .license-modal {
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);

@@ -17,6 +17,7 @@ import { buildComparativeCpc, buildFiscalControl } from "./fiscal21";
 import { fiscalTableDefinition } from "./fiscalCatalog";
 import { wheatProductKnowledge, WHEAT_AI_MUTATION_CAPABILITIES, WHEAT_PRODUCT_KNOWLEDGE_VERSION } from "./wheatProductKnowledge";
 import { WHEAT_APP_VERSION } from "../src/appVersion";
+import { describeCapabilityResult } from "./wheatAiResultPresentation";
 import {
   AUTOMATIC_FREE_MODEL_ID,
   REMOTE_MODEL_PREFIX,
@@ -262,6 +263,12 @@ function safeJson(value: unknown) {
 }
 
 const EMPTY_FINAL_RESPONSE = "Le modèle n’a pas fourni de réponse finale.";
+/**
+ * What Wheat says when the model emitted tool calls and no prose of its own.
+ * It announces work rather than reporting it, so a real capability answer
+ * replaces it instead of being appended to it.
+ */
+const TOOL_CALL_PLACEHOLDER = "J'ai préparé les actions demandées. Wheat appliquera les règles de risque et de confirmation ci-dessous.";
 const ANSI_ESCAPE = new RegExp(`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`, "g");
 
 export function stripModelReasoning(value: unknown) {
@@ -880,7 +887,7 @@ async function runRemoteChat(model: LocalModel, payload: Record<string, any>) {
     arguments: call.arguments,
   }));
   const text = result.text || (proposedToolCalls.length
-    ? "J'ai prepare les actions demandees. Wheat appliquera les regles de risque et de confirmation ci-dessous."
+    ? TOOL_CALL_PLACEHOLDER
     : EMPTY_FINAL_RESPONSE);
   // A successful failover is invisible to the user. It used to be appended to
   // the assistant's answer, which put an internal routing decision — provider,
@@ -1416,7 +1423,17 @@ export async function processWheatAiCapabilityCalls(input: {
     try {
       const prepared = definition.riskLevel > 0 ? await input.gateway.prepare(input.companyId, definition.id, args) : null;
       const executed = await input.gateway.execute(input.companyId, definition.id, prepared?.arguments ?? args, { preconditions: prepared?.preconditions, sessionId: input.sessionId });
-      results.push({ index, capabilityId: definition.id, status: "SUCCEEDED", result: executed.result, affectedRecords: resolvedAffectedRecords(prepared, executed.result) });
+      results.push({
+        index,
+        capabilityId: definition.id,
+        status: "SUCCEEDED",
+        result: executed.result,
+        // What the person asked for, ready to render. Derived here, beside the
+        // execution, so every capability answers the same way and none of them
+        // has to be taught how to present itself.
+        userPresentation: describeCapabilityResult(definition, executed.result),
+        affectedRecords: resolvedAffectedRecords(prepared, executed.result),
+      });
       await auditImmediateCapability(input.prisma, { companyId: input.companyId, actorUserId: input.actorUserId, sessionId: input.sessionId, permissionMode: input.permissionMode, definition, arguments: prepared?.arguments ?? args, status: "SUCCEEDED", durationMs: Date.now() - started, result: executed.result, intent });
     } catch (error) {
       results.push({ index, capabilityId: definition.id, status: "FAILED", error: describeCapabilityFailure(definition.id, error) });
@@ -1604,7 +1621,7 @@ ${String(payload.productKnowledge).slice(0, 20_000)}` : "";
     .filter((toolCall: any) => toolCall && typeof toolCall.name === "string" && toolCall.arguments && typeof toolCall.arguments === "object" && !Array.isArray(toolCall.arguments))
     .map((toolCall: any) => ({ capabilityId: capabilityIdFromModelName(toolCall.name), arguments: toolCall.arguments }));
   const proposedToolCall = proposedToolCalls[0] ? { toolName: proposedToolCalls[0].capabilityId, arguments: proposedToolCalls[0].arguments } : null;
-  return { text: proposedToolCalls.length && (!text || text === EMPTY_FINAL_RESPONSE) ? "J'ai préparé les actions demandées. Wheat appliquera les règles de risque et de confirmation ci-dessous." : text, proposedToolCall, proposedToolCalls, metrics: { doneReason: response.doneReason } };
+  return { text: proposedToolCalls.length && (!text || text === EMPTY_FINAL_RESPONSE) ? TOOL_CALL_PLACEHOLDER : text, proposedToolCall, proposedToolCalls, metrics: { doneReason: response.doneReason } };
 }
 
 async function runLlamaCppChat(model: LocalModel, executable: string | null, payload: Record<string, any>) {
@@ -1718,11 +1735,35 @@ export async function runLocalChat(root: string, manifest: ModelManifest, prisma
     const failed = processed.results.filter((item: any) => ["FAILED", "REJECTED", "NOT_AUTHORIZED_BY_INTENT"].includes(item.status)).length;
     const pending = processed.results.filter((item: any) => item.status === "PENDING_CONFIRMATION").length;
     const dryRuns = processed.results.filter((item: any) => item.status === "DRY_RUN").length;
-    const executionSummary = processed.results.length
+    /*
+     * The answer, not the plan.
+     *
+     * A capability that ran and returned figures has already answered the
+     * question; the conversation used to stop one step short of saying so and
+     * reported how many tools had run instead. The reply now leads with what
+     * each read capability found — deterministically, from the result itself
+     * — and keeps the execution tally for the operational states that
+     * genuinely need reporting: awaiting confirmation, previewed, or refused.
+     */
+    const answers = processed.results
+      .filter((item: any) => item.status === "SUCCEEDED" && item.userPresentation && item.userPresentation.kind !== "navigation")
+      .map((item: any) => {
+        const presentation = item.userPresentation;
+        return presentation.summary ? `${presentation.title} : ${presentation.summary}` : String(presentation.title);
+      });
+    const outstanding = pending + dryRuns + failed;
+    const executionSummary = outstanding
       ? `\n\nPlan Wheat AI : ${succeeded} exécutée(s), ${pending} en attente de confirmation, ${dryRuns} prévisualisée(s), ${failed} en échec ou refusée(s).`
       : "";
     const baseText = embeddedAction?.visibleText || result.text;
-    const text = `${baseText && baseText !== EMPTY_FINAL_RESPONSE ? baseText : "Action analysée."}${executionSummary}`;
+    // The model's pre-tool sentence only announces the call it is about to
+    // make. A real answer replaces it rather than sitting underneath it.
+    const meaningfulBase = baseText && baseText !== EMPTY_FINAL_RESPONSE && baseText !== TOOL_CALL_PLACEHOLDER ? baseText : "";
+    const answerText = answers.join("\n");
+    const leading = meaningfulBase && answerText
+      ? `${meaningfulBase}\n\n${answerText}`
+      : meaningfulBase || answerText || "Action analysée.";
+    const text = `${leading}${executionSummary}`;
     resultSummary = { provider: model.provider, modelId: model.id, responseCharacters: text.length, toolsUsed: routed.toolsUsed, availableCapabilityCount: availableCapabilities.length, intent: processed.intent, actionProposed: actionProposal?.toolName ?? null, actionCount: processed.results.length, succeeded, pending, dryRuns, failed };
     return { text, local: true, provider: model.provider, modelId: model.id, toolBoundary: "TYPED_TOOLS_ONLY", capabilityBoundary: "TYPED_CAPABILITY_REGISTRY", contextSources: routed.contextSources, toolsUsed: routed.toolsUsed, availableCapabilities: availableCapabilities.map((item) => item.id), productKnowledgeVersion: WHEAT_PRODUCT_KNOWLEDGE_VERSION, intent: processed.intent, actionProposal, actionProposals: processed.proposals, actionResults: processed.results };
   } catch (error) {

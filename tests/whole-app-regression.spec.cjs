@@ -249,10 +249,10 @@ test("whole app shell stays usable across pages, language changes, and inputs", 
 
     await page.keyboard.press("Control+K");
     await expect(page.getByRole("dialog", { name: "Palette de commandes" })).toBeVisible();
-    await page.locator(".command-input input").fill("paie");
-    await expect(page.locator(".command-input input")).toHaveValue("paie");
+    await page.locator(".wt-palette__search input").fill("paie");
+    await expect(page.locator(".wt-palette__search input")).toHaveValue("paie");
     await page.keyboard.press("Escape");
-    await expect(page.locator(".command-palette")).toHaveCount(0);
+    await expect(page.locator(".wt-palette")).toHaveCount(0);
 
     await page.evaluate(async () => {
       const api = window.wheat;

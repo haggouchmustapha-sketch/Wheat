@@ -125,6 +125,30 @@
 .wheat-ai-result p { margin-top: 4px; font-size: 10px; color: var(--muted); }
 .wheat-ai-result button { align-self: center; border: 1px solid var(--a21-line); border-radius: 4px; background: transparent; color: var(--a21-green); padding: 5px 8px; font: 650 9px Inter, sans-serif; }
 .wheat-ai-result.failed, .wheat-ai-result.rejected, .wheat-ai-result.not_authorized_by_intent { border-color: color-mix(in srgb, var(--red) 42%, var(--a21-line)); }
+
+/* -- The answer a capability produced --------------------------------------
+   The card leads with what was found rather than with the fact that something
+   ran, so the heading is read as a sentence and the figures are read as a
+   table. The identifier of the capability and the records it touched are
+   execution detail, disclosed only on request. */
+
+.wheat-ai-result__body strong { font-size: 11px; line-height: 1.35; }
+.wheat-ai-result__facts { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 6px; }
+.wheat-ai-result__facts div { display: flex; gap: 5px; align-items: baseline; }
+.wheat-ai-result__facts dt { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.wheat-ai-result__facts dd { margin: 0; font-size: 10px; font-variant-numeric: tabular-nums; }
+.wheat-ai-result__table { margin-top: 8px; overflow-x: auto; }
+.wheat-ai-result__table table { width: 100%; border-collapse: collapse; font-size: 10px; font-variant-numeric: tabular-nums; }
+.wheat-ai-result__table th, .wheat-ai-result__table td { border-bottom: 1px solid var(--a21-line); padding: 4px 8px 4px 0; text-align: left; white-space: nowrap; }
+.wheat-ai-result__table th { font-size: 9px; font-weight: 650; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.wheat-ai-result__table .is-numeric { text-align: right; padding-right: 0; padding-left: 8px; }
+.wheat-ai-result__more { display: block; margin-top: 5px; color: var(--muted); }
+/* Not the "Ouvrir" control beside it: this one only folds detail open. */
+.wheat-ai-result__disclosure { justify-self: start; margin-top: 8px; border: 0; padding: 2px 0; background: transparent; color: var(--muted); font: 600 9px Inter, sans-serif; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.wheat-ai-result__disclosure:hover { color: var(--a21-green); }
+.wheat-ai-result__technical { margin-top: 5px; }
+.wheat-ai-result__technical p { margin-top: 2px; font-size: 9px; color: var(--muted); word-break: break-word; }
+
 /* Empty state: a deliberate, unboxed invitation that fills the panel. */
 .wheat-ai-welcome {
   display: flex;

@@ -31,6 +31,12 @@ import {
   type InvoiceDraftPlan,
   type ResolvedRole,
 } from "./documentInvoiceDraft";
+import {
+  prepareDocumentReview,
+  readDocumentReview,
+  recordUserCorrections,
+  settleDocumentReview,
+} from "./documentReviewPayload";
 import { deriveReconciliationState, registerReconciliationIpc } from "./reconciliation";
 import { createFormDraftService, registerFormDraftIpc } from "./formDrafts";
 import { createWheatDossierSetupService, registerWheatDossierSetupIpc } from "./wheatDossierSetup";
@@ -1831,6 +1837,7 @@ function registerIpc() {
     const { createHash } = await import("node:crypto");
     const preparedDocuments = processed.map((doc) => {
       const storedBytes = fs.readFileSync(doc.storedPath);
+      const contentSha256 = createHash("sha256").update(storedBytes).digest("hex");
       return {
         data: {
           companyId,
@@ -1839,11 +1846,17 @@ function registerIpc() {
           fiscalYear: doc.fiscalYear,
           tags: doc.tags,
           storedPath: doc.storedPath,
-          contentSha256: createHash("sha256").update(storedBytes).digest("hex"),
+          contentSha256,
           mimeType: mimeTypeForManagedDocument(doc.storedPath),
           byteSize: BigInt(storedBytes.length),
           ocrText: doc.ocrText,
-          extracted: JSON.stringify(doc.extracted),
+          // Recognition is the first revision of a reviewable reading, not a
+          // finished answer. The payload records which reading this is, what
+          // it was read from, and — from here on — what anybody corrects.
+          extracted: JSON.stringify(prepareDocumentReview(doc.extracted as Record<string, unknown>, {
+            documentType: doc.type,
+            sourceFingerprint: contentSha256,
+          })),
           status: doc.status,
         },
       };
@@ -2737,6 +2750,26 @@ async function rerunDocumentOcr(expectedCompanyId: string | null, documentId: st
   });
   if (!processed) throw new Error("La reconnaissance n'a produit aucun résultat pour ce document.");
 
+  /*
+   * A better reading of the page, not permission to discard what a person
+   * established about it. Every correction made against the previous reading
+   * is carried into this one and re-applied on top of it; the revision counter
+   * records that this is a second pass.
+   */
+  let previousExtracted: Record<string, unknown> = {};
+  try {
+    previousExtracted = JSON.parse(document.extracted || "{}") as Record<string, unknown>;
+  } catch {
+    // An unreadable previous extraction carries nothing forward, which is the
+    // honest outcome — there is no correction history to be found in it.
+  }
+  const rerunExtracted = prepareDocumentReview(processed.extracted as Record<string, unknown>, {
+    documentType: processed.type,
+    sourceFingerprint: document.contentSha256 ?? null,
+    previous: previousExtracted,
+  });
+  const carriedCorrections = readDocumentReview(rerunExtracted)?.userCorrections.length ?? 0;
+
   const updated = await prisma.$transaction(async (tx) => {
     const result = await tx.document.update({
       where: { id },
@@ -2744,7 +2777,7 @@ async function rerunDocumentOcr(expectedCompanyId: string | null, documentId: st
         type: processed.type,
         tags: processed.tags,
         ocrText: processed.ocrText,
-        extracted: JSON.stringify(processed.extracted),
+        extracted: JSON.stringify(rerunExtracted),
         status: processed.status,
       },
     });
@@ -2754,7 +2787,13 @@ async function rerunDocumentOcr(expectedCompanyId: string | null, documentId: st
       entity: "Document",
       entityId: document.id,
       description: `${document.title} : reconnaissance relancée`,
-      details: { previousStatus: document.status, status: result.status, type: result.type },
+      details: {
+        previousStatus: document.status,
+        status: result.status,
+        type: result.type,
+        extractionRevision: readDocumentReview(rerunExtracted)?.extractionRevision ?? 1,
+        carriedCorrections,
+      },
     });
     return result;
   });
@@ -3025,9 +3064,28 @@ async function writeInvoiceDraftFromPlan(tx: any, input: { documentId: string; c
       },
       include: { lines: true, counterpartyModel: true },
     });
+    /*
+     * The reading has become accounting data, so the review is over.
+     *
+     * The payload is settled and compacted in the same transaction that links
+     * the document: the recogniser's working material — several hundred placed
+     * words per page, and the candidates it rejected — was useful while
+     * somebody was deciding and is dead weight in the dossier afterwards. Every
+     * canonical value, every check and every correction stays; the source
+     * attachment on disk is not touched at all.
+     */
+    const current = await tx.document.findUnique({ where: { id }, select: { extracted: true } });
+    let settled: string | undefined;
+    try {
+      settled = JSON.stringify(settleDocumentReview(JSON.parse(current?.extracted || "{}"), "CONFIRMED"));
+    } catch {
+      // An unreadable extraction is left exactly as it is: the draft has been
+      // planned from values already in hand, and rewriting a blob Wheat cannot
+      // parse would destroy evidence rather than compact it.
+    }
     const linked = await tx.document.updateMany({
       where: { id, companyId: document.companyId, invoiceId: null, paymentId: null, entryId: null },
-      data: { invoiceId: invoiceDraft.id, status: "INVOICE_DRAFT" },
+      data: { invoiceId: invoiceDraft.id, status: "INVOICE_DRAFT", ...(settled ? { extracted: settled } : {}) },
     });
     if (linked.count !== 1) throw new Error("Le document a été lié ou modifié dans une autre opération.");
     if (counterpartyCreated) {
@@ -3182,16 +3240,16 @@ async function updateDocumentExtraction(expectedCompanyId: string | null, payloa
   }
   const previous = JSON.parse(document.extracted || "{}");
   const correctedFields = payload.fields ?? {};
+  /*
+   * A correction is a decision, and it is recorded as one.
+   *
+   * Writing the value into `fields` is not enough on its own: re-running
+   * recognition rebuilds that object from the page and used to take every
+   * correction with it. The review payload keeps what a person established, so
+   * a later reading carries it forward instead of overwriting it.
+   */
   const next = {
-    ...previous,
-    fields: {
-      ...(previous.fields ?? {}),
-      ...correctedFields,
-    },
-    fieldConfidence: {
-      ...(previous.fieldConfidence ?? {}),
-      ...Object.fromEntries(Object.keys(correctedFields).map((key) => [key, 100])),
-    },
+    ...recordUserCorrections(previous, correctedFields),
     manualCorrectedAt: new Date().toISOString(),
   };
 

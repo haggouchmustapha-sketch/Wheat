@@ -194,6 +194,18 @@
 .op-notice--error { border-left-color: var(--op-red); background: var(--op-red-soft); color: var(--op-red); }
 .op-notice--info { border-left-color: var(--op-blue); background: var(--op-blue-soft); color: var(--op-blue-dark); }
 
+/* The message takes the room, so the explanation and the close control stay
+   together on the right rather than being spread by `space-between`. */
+.op-notice > span:first-child {
+  min-width: 0;
+  flex: 1;
+}
+
+.op-notice .wt-issue__info {
+  flex: none;
+  margin-left: auto;
+}
+
 .op-notice button {
   display: inline-flex;
   flex: none;
@@ -387,6 +399,18 @@
 .op-search:focus-within {
   border-color: var(--op-blue);
   box-shadow: 0 0 0 2px rgb(var(--primary-rgb) / 0.08);
+}
+
+/* The same control inside the narrow inspector column. */
+.op-search--inset {
+  width: 100%;
+  min-height: 28px;
+  margin: 6px 0;
+}
+
+.op-search--inset input {
+  padding: 4px 0;
+  font-size: 10px;
 }
 
 .op-search input {
@@ -1431,23 +1455,98 @@
   border-top: 1px solid var(--op-line);
 }
 
+.op-candidates > button,
+.op-candidates > .op-candidate-row {
+  border-bottom: 1px solid var(--op-line);
+  transition: background-color 120ms ease;
+}
+
 .op-candidates > button {
   display: grid;
   grid-template-columns: 16px minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
-  border: 0;
-  border-bottom: 1px solid var(--op-line);
+  border-width: 0 0 1px;
   padding: 10px 2px;
   background: transparent;
   color: var(--op-ink);
   text-align: left;
-  transition: background-color 120ms ease;
+}
+
+/* A row carries two actions — choose this line, or rule it out — so the
+   selectable part is a button inside the row rather than the row itself. */
+.op-candidate-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.op-candidate-pick {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  padding: 10px 2px;
+  background: transparent;
+  color: var(--op-ink);
+  text-align: left;
 }
 
 .op-candidates > button:hover,
-.op-candidates > button.is-selected {
+.op-candidates > button.is-selected,
+.op-candidate-row:hover,
+.op-candidate-row.is-selected {
   background: var(--op-blue-soft);
+}
+
+.op-candidate-reject {
+  flex: none;
+  opacity: 0.55;
+}
+
+.op-candidate-row:hover .op-candidate-reject,
+.op-candidate-reject:focus-visible {
+  opacity: 1;
+}
+
+.op-candidate-reasons {
+  color: var(--op-blue);
+  font-size: 8px;
+  line-height: 1.4;
+}
+
+.op-candidate-rejected {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0;
+  padding: 6px 0 0;
+  color: var(--op-muted);
+  font-size: 9px;
+}
+
+.op-candidate-rejected button {
+  border: 0;
+  background: transparent;
+  color: var(--op-blue);
+  font-size: 9px;
+  font-weight: 640;
+  text-decoration: underline;
+}
+
+.op-allocation-target {
+  margin: 0 0 4px;
+  color: var(--op-muted);
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.op-allocation-target strong {
+  color: var(--op-ink);
 }
 
 .op-radio-mark {
@@ -1461,7 +1560,8 @@
   background: var(--op-surface);
 }
 
-.op-candidates > button.is-selected .op-radio-mark {
+.op-candidates > button.is-selected .op-radio-mark,
+.op-candidate-row.is-selected .op-radio-mark {
   border-color: var(--op-blue);
 }
 
@@ -1937,4 +2037,86 @@
 
 .op-composer__head .op-draft-state[data-state="error"] {
   color: var(--op-warning, var(--op-muted));
+}
+
+/* -- Bank movements: the statement's two money columns ---------------------
+   A relevé prints débit and crédit side by side, and the reconciliation table
+   now does the same. The empty half of a row is a placeholder rather than a
+   blank cell, so a column that happens to be empty still reads as a column. */
+
+.op-recon-table .op-blank-cell {
+  color: var(--op-faint);
+}
+
+/* -- Settlements offered as evidence for a bank movement -------------------
+   Rendered with the accounting candidates above them and deliberately styled
+   the same: they are read in one pass, as one question — what is this movement,
+   and which settlement already recorded is it. Checkboxes rather than radios
+   because a single bank line can clear several cheques. */
+
+.op-candidates.op-evidence > label {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--op-line);
+  padding: 10px 2px;
+  color: var(--op-ink);
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+
+.op-candidates.op-evidence > label:hover,
+.op-candidates.op-evidence > label.is-selected {
+  background: var(--op-blue-soft);
+}
+
+.op-candidates.op-evidence input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--op-blue);
+}
+
+.op-inspector-hint {
+  margin: 8px 0 0;
+  color: var(--op-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+/* -- The statement a person arrived to reconcile ---------------------------
+   Arriving from an import shows that import, not every movement the account
+   has ever held. The banner exists so the narrowing is never a mystery: it
+   names the file being shown and offers the whole account beside it. */
+
+.op-batch-banner {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--op-blue);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  background: var(--op-blue-soft);
+}
+
+.op-batch-banner > svg {
+  color: var(--op-blue);
+}
+
+.op-batch-banner strong,
+.op-batch-banner span {
+  display: block;
+}
+
+.op-batch-banner strong {
+  font-size: 12px;
+}
+
+.op-batch-banner span {
+  margin-top: 2px;
+  color: var(--op-muted);
+  font-size: 11px;
 }

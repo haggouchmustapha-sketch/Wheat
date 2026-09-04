@@ -298,6 +298,37 @@ test.describe("how the forms use it", () => {
   });
 
   /*
+   * The statement import wizard, the last composer holding its work only in
+   * component state. Mapping an unfamiliar relevé is the slow part of an
+   * import, and this dialog is exactly what somebody closes to go and read the
+   * file they are mapping.
+   */
+  test("the bank statement mapping is held, and the consent to import duplicates is not", () => {
+    const app = read("src", "App.tsx");
+    const modal = app.slice(app.indexOf("function BankStatementImportModal"));
+
+    expect(app, "the import mapping has no draft").toContain('entity: "bank.statement.import"');
+    // One file in one account: a mapping worked out for one statement can
+    // never surface against another, nor against another bank account.
+    expect(modal).toContain("draftKey: `${draft.bankAccountId}:${draft.sourceSha256}`");
+
+    // Only the mapping is held. `review` is the service's answer, recomputed
+    // rather than remembered; `allowDuplicates` is consent given against one
+    // review, and restoring it would pre-arm an import nobody re-authorised.
+    expect(modal).toContain("value: { mapping }");
+    const restore = modal.slice(modal.indexOf("onRestore: (payload) => {"));
+    expect(restore.slice(0, 600)).toContain("setAllowDuplicates(false)");
+    expect(restore.slice(0, 600)).toContain("setReview(null)");
+
+    // Released only after the import service returned, like every other form.
+    const confirm = modal.slice(modal.indexOf("const confirmImport = async () => {"));
+    const imported = confirm.indexOf("await window.wheat.importBankStatement");
+    const cleared = confirm.indexOf("await mappingDraft.clear()");
+    expect(imported, "the import is never called").toBeGreaterThan(-1);
+    expect(cleared, "the mapping draft is never released").toBeGreaterThan(imported);
+  });
+
+  /*
    * The leak this rule exists to prevent: a form does not empty itself the
    * instant the dossier changes, so for one render its contents belong to the
    * previous dossier while `companyId` already names the new one. Autosaving

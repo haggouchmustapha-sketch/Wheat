@@ -161,12 +161,19 @@ test("immutable invoice artifacts reject in-place mutation and deletion at the S
 });
 
 /**
- * The shipped release. Every version location has to agree with it, which is
- * what this constant exists to enforce: bumping the product means changing it
- * here once, and the test then proves package.json, the lockfile and the
- * renderer's derived version all moved together.
+ * The shipped release, read from the one file that states it.
+ *
+ * Every other version location has to agree with this, which is what the
+ * assertions below enforce: the lockfile in both of its places, and a renderer
+ * that derives its version rather than restating it.
+ *
+ * This used to be a literal, on the reasoning that bumping the product should
+ * mean changing it here once. In practice a release changed package.json and
+ * left this behind, so the suite failed on the version rather than on anything
+ * it is meant to protect — and a stale literal proves only that two files were
+ * edited, never that they agree.
  */
-const RELEASE_VERSION = "2.1.260901";
+const RELEASE_VERSION = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")).version;
 
 test("the 1.4 migration stays embedded while the runtime reports the current schema version", () => {
   const sql = fs.readFileSync(migrationPath, "utf8");
@@ -179,7 +186,8 @@ test("the 1.4 migration stays embedded while the runtime reports the current sch
   expect(databaseSource).toContain("schema=2.1.0");
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
   expect(packageJson.name).toBe("wheat");
-  expect(packageJson.version).toBe(RELEASE_VERSION);
+  // 2.1.<YYMMDD><n>, valid SemVer, per docs/wheat-release-process.md.
+  expect(packageJson.version).toMatch(/^2\.1\.\d{6,}$/);
   expect(packageJson.atlasVersion).toBeUndefined();
   expect(packageJson.build.buildNumber).toBeUndefined();
   expect(packageJson.build.buildVersion).toBeUndefined();
@@ -202,7 +210,20 @@ test("a fresh database applies every migration and seeds without inventing compl
   const env = { ...process.env, DATABASE_URL: databaseUrl, RUST_BACKTRACE: "1", RUST_LOG: "info" };
 
   try {
-    execFileSync(process.execPath, [path.join(root, "node_modules", "prisma", "build", "index.js"), "migrate", "reset", "--force", "--skip-seed"], { cwd: root, env, stdio: "pipe", timeout: 60_000 });
+    /*
+     * `migrate deploy`, not `migrate reset --force`.
+     *
+     * The database this test measures is created empty a few lines above and
+     * removed in the finally, so there has never been anything here to reset:
+     * the destructive command was doing the work of a non-destructive one.
+     * `deploy` applies every migration in order to that fresh file, which is
+     * exactly what the test is named for, and it drops the only reason this
+     * test needed a destructive-operation guard waived to run at all.
+     *
+     * The coverage is unchanged — every assertion below still runs against the
+     * same fully migrated, freshly seeded database.
+     */
+    execFileSync(process.execPath, [path.join(root, "node_modules", "prisma", "build", "index.js"), "migrate", "deploy"], { cwd: root, env, stdio: "pipe", timeout: 60_000 });
     execFileSync(process.execPath, [path.join(root, "node_modules", "tsx", "dist", "cli.mjs"), "prisma/seed.ts"], { cwd: root, env, stdio: "pipe", timeout: 60_000 });
     const database = new DatabaseSync(databasePath);
     try {

@@ -162,6 +162,49 @@ test("the shared review and the guided journey are wired end to end", async () =
     await expect(journeyPanel.locator("[data-stage='dossier']")).toContainText("Créer le dossier");
     await expect(journeyPanel.locator("[data-stage='entries']")).toBeVisible();
 
+    /* ------------------------------------- silence, on ordinary interaction */
+
+    /*
+     * The reviewer used to appear during ordinary bookkeeping.
+     *
+     * Reading a screen, opening a form and closing it again are not accounting
+     * events, and a level-2 draft that passes every deterministic check owes
+     * nobody a second opinion. The reviewer surface must be absent throughout —
+     * not merely empty — and no provider or model identifier may reach the
+     * window on this path.
+     */
+    const reviewSurface = page.locator(".wt-review");
+
+    for (const destination of ["Tableau de bord", "Écritures", "Factures & paiements", "Banque & rapprochement", "Accueil"]) {
+      await page.locator(".wt-rail").getByRole("button", { name: destination, exact: true }).click();
+      await page.waitForTimeout(150);
+      await expect(reviewSurface, `the reviewer appeared on ${destination}`).toHaveCount(0);
+    }
+
+    // A form opened, typed into, and abandoned.
+    await page.getByRole("banner").getByRole("button", { name: "Nouvelle écriture" }).click();
+    const scratchDialog = page.getByRole("dialog", { name: "Nouvelle écriture" });
+    await expect(scratchDialog).toBeVisible();
+    await page.getByPlaceholder("Ex : Facture client mars 2026").fill("Brouillon abandonné");
+    await expect(reviewSurface).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await expect(scratchDialog).toHaveCount(0, { timeout: 10000 });
+    await expect(reviewSurface).toHaveCount(0);
+
+    // A level-2 save that passes every check: reviewed deterministically,
+    // reported as needing no reading, and shown to nobody.
+    const quietReview = await page.evaluate((companyId) => window.wheat.reviewBeforeMutation({
+      companyId,
+      workflowId: "counterparty.create",
+      draft: { kind: "SUPPLIER", displayName: "FOURNISSEUR SILENCIEUX SARL", ice: "001234567000041" },
+    }), fixture.companyId);
+    expect(quietReview.outcome).toBe("PASS");
+    expect(quietReview.model.status).toBe("NOT_NEEDED");
+    expect(quietReview.model.ran).toBe(false);
+    // The ordinary reading path never names the provider or the model.
+    expect(JSON.stringify(quietReview.model.message ?? "")).not.toMatch(/ollama|openrouter|groq|llama|qwen|mistral/i);
+    await expect(reviewSurface).toHaveCount(0);
+
     /* ---------------------------------- the dialog, on a real blocked save */
 
     await page.getByRole("banner").getByRole("button", { name: "Nouvelle écriture" }).click();
@@ -180,9 +223,21 @@ test("the shared review and the guided journey are wired end to end", async () =
     await expect(reviewDialog).toContainText("L'écriture n'est pas équilibrée.");
     // Why it matters, in accounting terms, not just "invalid".
     await expect(reviewDialog).toContainText("partie double");
-    // The provenance line is always shown, and states which of the three
-    // cases actually happened.
-    await expect(reviewDialog.locator(".wt-review__provenance")).toContainText(/Relu par Wheat AI|Relecture Wheat AI non exécutée|Contrôles Wheat uniquement/);
+    /*
+     * The provenance line reports a reading that was attempted: it was read
+     * here, read remotely, or attempted and not completed.
+     *
+     * It is deliberately absent when no reading was owed. "Contrôles Wheat
+     * uniquement" and "Relecture Wheat AI non exécutée" were removed with the
+     * behaviour they described — announcing an absent second opinion on top
+     * of a real finding taught people that Wheat AI keeps failing — so this
+     * no longer accepts them.
+     */
+    const provenance = reviewDialog.locator(".wt-review__provenance");
+    if (await provenance.count()) {
+      await expect(provenance).toContainText(/Relu par Wheat AI|Relecture par Wheat AI non aboutie/);
+      await expect(provenance).not.toContainText(/Contrôles Wheat uniquement|non exécutée/);
+    }
     await expect(reviewDialog.getByRole("button", { name: "Continuer" })).toBeDisabled();
 
     // Escape returns to the form; nothing has been written.

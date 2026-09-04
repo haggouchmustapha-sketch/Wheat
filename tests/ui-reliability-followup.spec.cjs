@@ -92,7 +92,7 @@ test("follow-up UI reliability: forms, modal cleanup, stale loads, theme, and er
     await displayName.press("h");
     await expect(displayName).toHaveValue("Client Alpha");
     await displayName.press("Control+K");
-    await expect(page.locator(".command-palette")).toHaveCount(0);
+    await expect(page.locator(".wt-palette")).toHaveCount(0);
     await expect(displayName).toHaveValue("Client Alpha");
 
     await page.getByLabel("E-mail").fill("client@example.ma");

@@ -3016,7 +3016,7 @@ function AppRail({
         <WheatMark size={32} />
         <span className="wt-rail__brand-text">
           <span className="wt-rail__brand-name wheat-wordmark">Wheat</span>
-          <span className="wt-rail__brand-note">{WHEAT_RELEASE_LABEL} · comptabilité locale</span>
+          <span className="wt-rail__brand-note">comptabilité locale</span>
         </span>
         <IconButton
           className="wt-rail__collapse"

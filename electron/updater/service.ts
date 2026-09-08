@@ -60,6 +60,9 @@ export class UpdateService {
   }
 
   async confirmSuccessfulStartup() {
+    // Renderer refreshes can request confirmation while a handoff is in flight.
+    // This is still the running session, not an abandoned installation.
+    if (this.installPromise) return this.getStatus();
     const state = await this.store.confirmSuccessfulStartup();
     if (state.status.phase === "updated") await this.logger.log("update-success", { version: this.options.currentVersion });
     this.emit(state.status);

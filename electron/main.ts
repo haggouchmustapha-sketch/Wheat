@@ -902,6 +902,9 @@ async function relaunchWheat() {
  */
 async function checkForUpdates(automatic = false) {
   if (!updateService) throw new Error("Wheat updater is not ready.");
+  // Diagnose the previous attempt before a check can rewrite it as already-staged,
+  // even when renderer bootstrap/confirmation takes longer than our timer.
+  if (automatic && !startupDatabaseError) await updateService.confirmSuccessfulStartup();
   if (automatic && await updateService.hasUnresolvedInstallationFailure()) return updateService.getStatus();
   const state = await updateService.checkForUpdates({ automatic });
   return state.status;

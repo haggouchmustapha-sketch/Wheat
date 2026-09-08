@@ -624,3 +624,27 @@ test('the helper replaces a versioned executable and relaunches the new program'
     expect(fs.readFileSync(workspace.dataFile, 'utf8')).toBe('untouched profile');
   } finally { fs.rmSync(workspace.directory, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }); }
 });
+
+test('startup confirmation during a live handoff does not mark it abandoned', async () => {
+  const workspace = temporaryWorkspace();
+  let releaseHandoff;
+  const handoff = new Promise(resolve => { releaseHandoff = resolve; });
+  try {
+    writeRelease(workspace.feed);
+    const service = serviceFor(workspace, '2.1.0', true);
+    await offerThenDownload(service);
+    let started;
+    const entered = new Promise(resolve => { started = resolve; });
+    const install = service.installStagedUpdate(async () => { started(); await handoff; });
+    await entered;
+    expect((await service.confirmSuccessfulStartup()).phase).toBe('installing');
+    releaseHandoff();
+    await install;
+  } finally { releaseHandoff(); fs.rmSync(workspace.directory, { recursive: true, force: true }); }
+});
+
+test('automatic startup checks diagnose abandoned installs before checking the feed', () => {
+  const source = fs.readFileSync(path.join(root, 'electron', 'main.ts'), 'utf8');
+  const body = source.slice(source.indexOf('async function checkForUpdates(automatic'));
+  expect(body.indexOf('await updateService.confirmSuccessfulStartup()')).toBeLessThan(body.indexOf('await updateService.checkForUpdates('));
+});

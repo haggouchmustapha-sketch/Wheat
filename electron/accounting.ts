@@ -58,9 +58,18 @@ export function parseAccountingDate(value: unknown, label = "La date"): Date {
   if (typeof value !== "string" && !(value instanceof Date)) {
     throw new Error(`${label} est obligatoire.`);
   }
+  if (typeof value === "string") {
+    // Accounting days must not use Date's locale guessing or calendar rollover.
+    // Keep ISO instants for existing callers, with an explicit timezone.
+    if (!/^\d{4}-\d{2}-\d{2}(?:T(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d{1,3})?)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d))?$/.test(value)) {
+      throw new Error(`${label} doit être au format AAAA-MM-JJ ou un horodatage ISO avec fuseau horaire.`);
+    }
+    parseIsoDay(value.slice(0, 10), label);
+  }
   const date = value instanceof Date ? new Date(value.getTime()) : new Date(value);
   if (Number.isNaN(date.getTime())) throw new Error(`${label} est invalide.`);
-  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  date.setUTCHours(0, 0, 0, 0);
+  return date;
 }
 
 export function parseIsoDay(value: unknown, label: string): Date {

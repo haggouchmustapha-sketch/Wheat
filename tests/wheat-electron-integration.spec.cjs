@@ -2,16 +2,18 @@ const { test, expect, _electron: electron } = require("@playwright/test");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { startOllamaFixture } = require("./fixtures/ollama-server.cjs");
 
 test("Wheat services share the desktop database, numbering and typed-tool boundary", async () => {
   test.setTimeout(120000);
   const root = process.env.WHEAT_CWD ?? path.resolve(__dirname, "..");
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "atlas-21-integration-"));
+  const provider = await startOllamaFixture();
   const app = await electron.launch({
     executablePath: path.join(root, "node_modules", "electron", "dist", "electron.exe"),
     args: [root],
     cwd: root,
-    env: { ...process.env, WHEAT_USER_DATA_DIR: path.join(temporary, "profile") },
+    env: { ...process.env, WHEAT_USER_DATA_DIR: path.join(temporary, "profile"), OLLAMA_HOST: provider.url },
   });
   try {
     const page = await app.firstWindow();
@@ -160,6 +162,7 @@ test("Wheat services share the desktop database, numbering and typed-tool bounda
     await expect(page.getByText("Modèle utilisé")).toBeVisible();
   } finally {
     await app.close().catch(() => undefined);
+    await provider.close();
     fs.rmSync(temporary, { recursive: true, force: true });
   }
 });

@@ -391,8 +391,10 @@ function normalizeInvoicePayload(payload: unknown) {
     ACHAT: "PURCHASE",
   });
   const invoiceDate = parseAccountingDate(input.invoiceDate, "La date de facture");
-  const dueDate = parseAccountingDate(input.dueDate, "La date d'échéance");
-  if (dueDate < invoiceDate) throw new Error("La date d'échéance ne peut pas précéder la date de facture.");
+  const dueDate = input.dueDate === null || input.dueDate === undefined || input.dueDate === ""
+    ? null
+    : parseAccountingDate(input.dueDate, "La date d'échéance");
+  if (dueDate && dueDate < invoiceDate) throw new Error("La date d'échéance ne peut pas précéder la date de facture.");
   const lines = normalizeInvoiceLines(input.lines);
   const htCents = lines.reduce((sum, line) => sum + line.htCents, 0n);
   const vatCents = lines.reduce((sum, line) => sum + line.vatCents, 0n);

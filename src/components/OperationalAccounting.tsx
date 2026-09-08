@@ -104,7 +104,7 @@ type InvoiceRecord = LooseRecord & {
   kind: "SALE" | "PURCHASE" | string;
   invoiceNo: string;
   invoiceDate: string;
-  dueDate: string;
+  dueDate: string | null;
   lifecycleStatus: string;
   status?: string;
   counterparty?: string;
@@ -1453,7 +1453,7 @@ export function OperationalAccounting({
                   <input required={tab === "purchases"} value={invoiceDraft.invoiceNo} onChange={(event) => setInvoiceDraft((current) => ({ ...current, invoiceNo: event.target.value }))} placeholder={tab === "sales" ? "Attribué à la comptabilisation" : "FR-2026-…"} />
                 </label>
                 <label className="op-field"><span>Date</span><input type="date" required value={invoiceDraft.invoiceDate} onChange={(event) => setInvoiceDraft((current) => ({ ...current, invoiceDate: event.target.value }))} /></label>
-                <label className="op-field"><span>Échéance</span><input type="date" required value={invoiceDraft.dueDate} onChange={(event) => setInvoiceDraft((current) => ({ ...current, dueDate: event.target.value }))} /></label>
+                <label className="op-field"><span>Échéance</span><input type="date" value={invoiceDraft.dueDate} onChange={(event) => setInvoiceDraft((current) => ({ ...current, dueDate: event.target.value }))} /><small>Facultative si les conditions de paiement sont inconnues.</small></label>
                 <label className="op-field op-field--wide"><span>Configuration TVA versionnée <em>requise si TVA</em></span><WheatSelect
                   ariaLabel="Configuration TVA versionnée"
                   placeholder="Aucune TVA / règle non applicable"

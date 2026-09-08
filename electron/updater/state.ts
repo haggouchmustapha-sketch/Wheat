@@ -107,7 +107,7 @@ export class UpdateStateStore {
       await this.write(state);
       return state;
     }
-    if (state.status.phase === "installing" && semver.neq(state.pending.release.version, this.currentVersion)) {
+    if (["installing", "awaiting-confirmation"].includes(state.status.phase) && semver.neq(state.pending.release.version, this.currentVersion)) {
       state.status = {
         ...state.status,
         phase: "error",

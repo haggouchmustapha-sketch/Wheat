@@ -203,6 +203,9 @@ test("follow-up UI reliability: forms, modal cleanup, stale loads, theme, and er
     await accountNumber.fill("912345");
     await expect(accountNumber).toHaveValue("912345");
     await chooseOption(page, page.locator('.company-switcher [role="combobox"]'), { label: enterCompanyName });
+    // Selection starts an async bootstrap and outgoing-page transition. Wait
+    // for the new workspace's initial tab, not an actionable old form.
+    await expect(page.getByRole("tab", { name: /Rapports/ })).toHaveAttribute("aria-selected", "true");
     // Changing dossier returns the workspace to its first tab, so the form has
     // to be reopened before its contents can be inspected at all. Asserting on
     // the field without reopening asserted on an element that is never present,
@@ -213,6 +216,7 @@ test("follow-up UI reliability: forms, modal cleanup, stale loads, theme, and er
     // another dossier.
     await expect(accountNumber).toHaveValue("");
     await chooseOption(page, page.locator('.company-switcher [role="combobox"]'), { value: fixture.companyId });
+    await expect(page.getByRole("tab", { name: /Rapports/ })).toHaveAttribute("aria-selected", "true");
     await page.getByRole("tab", { name: /Référentiels/ }).click();
     await page.getByRole("button", { name: "Comptes", exact: true }).click();
     await accountNumber.fill("912345");

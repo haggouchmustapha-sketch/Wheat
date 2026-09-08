@@ -4,7 +4,8 @@ param(
   [Parameter(Mandatory = $true)][string]$CurrentExecutable,
   [Parameter(Mandatory = $true)][string]$StatePath,
   [Parameter(Mandatory = $true)][string]$RollbackDirectory,
-  [Parameter(Mandatory = $true)][string]$LogPath
+  [Parameter(Mandatory = $true)][string]$LogPath,
+  [Parameter(Mandatory = $true)][string]$ReadyPath
 )
 
 $ErrorActionPreference = "Stop"
@@ -49,6 +50,7 @@ function Set-UpdaterState {
 function Stop-WithRefusal {
   param([string]$Reason)
   Write-UpdaterLog "installation-refused" $Reason
+  [Console]::Error.WriteLine($Reason)
   Set-UpdaterState -Phase "error" -Message "Update refused; nothing was changed" -Failure $Reason
   exit 2
 }
@@ -106,6 +108,17 @@ if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) { Stop-WithRefusal 
 $uninstaller = Join-Path $installDirectory ("Uninstall " + [IO.Path]::GetFileNameWithoutExtension($executable) + ".exe")
 if (-not (Test-Path -LiteralPath $uninstaller -PathType Leaf)) {
   Stop-WithRefusal "The running Wheat in $installDirectory was not put there by the installer (no uninstaller found), so the installer cannot replace it. Reinstall Wheat from the downloaded installer instead."
+}
+
+# All initialization and guards must succeed before Electron may close.
+# A readiness failure must not restore an older rollback or relaunch Wheat.
+try {
+  $readyTemporary = "$ReadyPath.tmp"
+  [IO.File]::WriteAllText($readyTemporary, [string]$PID)
+  Move-Item -LiteralPath $readyTemporary -Destination $ReadyPath
+  Write-UpdaterLog "helper-ready" "pid=$PID"
+} catch {
+  Stop-WithRefusal "Could not acknowledge helper readiness: $($_.Exception.Message)"
 }
 
 try {

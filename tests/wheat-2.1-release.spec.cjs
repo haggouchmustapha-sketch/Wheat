@@ -8,6 +8,7 @@
  */
 const { test, expect, _electron: electron } = require("@playwright/test");
 const { openDossierForWork } = require("./wheat-ui-helpers.cjs");
+const { startOllamaFixture } = require("./fixtures/ollama-server.cjs");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -423,7 +424,8 @@ test("every version location agrees, and only package.json states the version", 
 /* --------------------------------------------------- image attachments */
 
 test("the image attachment control follows the model's declared vision support", async () => {
-  const { app, temporary } = await launch();
+  const provider = await startOllamaFixture();
+  const { app, temporary } = await launch({ OLLAMA_HOST: provider.url });
   try {
     const page = await app.firstWindow();
     await page.waitForFunction(() => Boolean(window.wheat), null, { timeout: 20000 });
@@ -493,10 +495,11 @@ test("the image attachment control follows the model's declared vision support",
           return String(error?.message ?? error);
         }
       }, { id: companyId, modelId: textOnly.id });
-      expect(refusal).toMatch(/n'accepte pas d'image/i);
+      expect(refusal).toMatch(/ne lit pas les images|n'accepte pas d'image/i);
     }
 
-    expect(models.length, "no Ollama or provider model was available to exercise capability gating").toBeGreaterThan(0);
+    expect(vision, "the local protocol fixture exposes a vision model").toBeTruthy();
+    expect(textOnly, "the local protocol fixture exposes a text model").toBeTruthy();
 
     // Attachment validation is independent of which model is selected: an
     // unsupported format never reaches a provider, whatever its capabilities.
@@ -513,8 +516,10 @@ test("the image attachment control follows the model's declared vision support",
       }
     }, { id: companyId, modelId: (vision ?? textOnly ?? models[0]).id });
     expect(rejected).toMatch(/PNG, JPG ou WebP/i);
+    expect(provider.requests).toHaveLength(0);
   } finally {
     await app.close().catch(() => undefined);
+    await provider.close();
     fs.rmSync(temporary, { recursive: true, force: true });
   }
 });

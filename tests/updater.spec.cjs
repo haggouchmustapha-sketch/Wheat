@@ -351,6 +351,7 @@ function runUpdateHelper(fixture) {
       "-StatePath", fixture.statePath,
       "-RollbackDirectory", fixture.rollback,
       "-LogPath", fixture.logPath,
+      "-ReadyPath", path.join(path.dirname(fixture.statePath), "test.ready"),
     ], { windowsHide: true, stdio: "pipe", timeout: 60000 });
     return { code: 0 };
   } catch (error) {
@@ -411,14 +412,14 @@ test("an installer that exits zero without changing the executable is a failure,
   } finally { fs.rmSync(workspace.directory, { recursive: true, force: true }); }
 });
 
-test("the helper launcher resolves only once the child process has actually started", async () => {
+test("the real helper acknowledges readiness with spaced paths before touching program files", async () => {
   test.skip(process.platform !== "win32", "Windows spawn semantics");
   const workspace = temporaryWorkspace();
   try {
     const fixture = installedFixture(workspace);
     const state = JSON.parse(fs.readFileSync(fixture.statePath, "utf8"));
-    const helperPath = path.join(workspace.directory, "noop-helper.ps1");
-    fs.writeFileSync(helperPath, "exit 0\n");
+    const helperPath = path.join(workspace.directory, "helper with spaces.ps1");
+    fs.copyFileSync(path.join(root, "resources", "updater", "update-helper.ps1"), helperPath);
     let resolved = false;
     const launch = updater.launchWindowsUpdateHelper(state, {
       stateDirectory: workspace.state,
@@ -430,9 +431,14 @@ test("the helper launcher resolves only once the child process has actually star
     // this resolved already, app.exit(0) could outrun CreateProcess and the
     // helper would never run at all.
     expect(resolved).toBe(false);
-    expect(await launch).toBeGreaterThan(0);
+    const pid = await launch;
+    expect(pid).toBeGreaterThan(0);
     expect(resolved).toBe(true);
-  } finally { fs.rmSync(workspace.directory, { recursive: true, force: true }); }
+    expect(fs.readFileSync(fixture.logPath, "utf8")).toContain('helper-ready');
+    expect(fs.existsSync(fixture.rollback)).toBe(false);
+    execFileSync('taskkill.exe', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'pipe' });
+    await expect.poll(() => { try { process.kill(pid, 0); return true; } catch { return false; } }).toBe(false);
+  } finally { fs.rmSync(workspace.directory, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }); }
 });
 
 test("a helper that cannot be spawned rejects instead of reporting a restart", async () => {
@@ -471,7 +477,8 @@ test("the app exits only after the update helper launch has been awaited", () =>
   expect(exit).toBeGreaterThan(launch);
   // A launch that never started must be reported and must not close the app.
   expect(body).toContain('"helper-launch-failed"');
-  expect(body.slice(0, exit)).toContain('"helper-started-confirmed"');
+  expect(body.slice(0, exit)).toContain('"helper-ready-confirmed"');
+  expect(body.indexOf('"wheat:app:will-restart"')).toBeGreaterThan(launch);
 });
 
 function writeReleaseObject(version) {
@@ -484,3 +491,136 @@ function writeReleaseObject(version) {
     sha256: "a".repeat(64),
   };
 }
+
+for (const scenario of [
+  { name: "parse error", script: 'param(\n', error: /Missing|missing|terminator|param/i },
+  { name: "parameter binding error", script: 'param([int]$ParentPid)\n', parentPid: 'invalid-pid', error: /convert|ParentPid/i },
+  { name: "early successful exit", script: 'exit 0\n', error: /exited before readiness/ },
+  { name: "timeout", script: 'Start-Sleep -Seconds 60\n', timeout: 1500, error: /did not become ready/ },
+  { name: "wrong readiness PID", script: 'param([string]$ReadyPath)\n[IO.File]::WriteAllText($ReadyPath, "999999")\nStart-Sleep -Seconds 60\n', timeout: 1500, error: /did not become ready/ },
+  { name: "missing helper", missing: true, error: /Required update file is missing/ },
+  { name: "helper guard refusal", noUninstaller: true, error: /no uninstaller found/ },
+]) {
+  test(`helper ${scenario.name} retains the verified update and reports failure without shutdown`, async () => {
+    test.skip(process.platform !== 'win32', 'Windows helper');
+    const workspace = temporaryWorkspace();
+    try {
+      const fixture = installedFixture(workspace, { withUninstaller: !scenario.noUninstaller });
+      fs.writeFileSync(workspace.dataFile, 'accounting data must survive');
+      fs.rmSync(fixture.statePath);
+      writeRelease(workspace.feed);
+      const service = serviceFor(workspace, '2.1.0', true);
+      await offerThenDownload(service);
+      const helperPath = scenario.noUninstaller
+        ? path.join(root, 'resources', 'updater', 'update-helper.ps1')
+        : path.join(workspace.directory, 'startup fixture.ps1');
+      if (scenario.script) fs.writeFileSync(helperPath, scenario.script);
+      let shutdown = false;
+      const result = await service.installStagedUpdate(async state => {
+        await updater.launchWindowsUpdateHelper(state, {
+          stateDirectory: workspace.state, helperPath,
+          currentExecutable: fixture.currentExecutable,
+          parentPid: scenario.parentPid ?? process.pid,
+          spawnTimeoutMs: scenario.timeout ?? 10000,
+        });
+        shutdown = true;
+      });
+      expect(shutdown).toBe(false);
+      expect(result.status.phase).toBe('ready');
+      expect(result.status.error).toMatch(scenario.error);
+      expect(result.pending.installStartedAt).toBeUndefined();
+      expect(fs.existsSync(result.pending.artifactPath)).toBe(true);
+      expect(fs.existsSync(fixture.rollback)).toBe(false);
+      expect(fs.readFileSync(workspace.dataFile, 'utf8')).toBe('accounting data must survive');
+      if (!scenario.missing) {
+        expect(fs.readdirSync(workspace.state).some(name => name.endsWith('-startup.log'))).toBe(true);
+      }
+    } finally { fs.rmSync(workspace.directory, { recursive: true, force: true }); }
+  });
+}
+
+for (const phase of ['installing', 'awaiting-confirmation']) {
+  test(`old-version startup recovers abandoned ${phase} without announcing success`, async () => {
+    const workspace = temporaryWorkspace();
+    try {
+      const fixture = installedFixture(workspace);
+      const state = JSON.parse(fs.readFileSync(fixture.statePath, 'utf8'));
+      state.status.phase = phase;
+      fs.writeFileSync(fixture.statePath, JSON.stringify(state));
+      const status = await serviceFor(workspace, '2.1.0', true).confirmSuccessfulStartup();
+      expect(status.phase).toBe('error');
+      expect(status.error).toContain('did not complete');
+      expect(status.installedUpdate).toBeUndefined();
+      expect(fs.existsSync(fixture.installer)).toBe(true);
+    } finally { fs.rmSync(workspace.directory, { recursive: true, force: true }); }
+  });
+}
+
+test('the acknowledged helper survives parent exit and performs rollback without touching profile data', async () => {
+  test.skip(process.platform !== 'win32', 'Windows helper lifecycle');
+  const workspace = temporaryWorkspace();
+  try {
+    const fixture = installedFixture(workspace);
+    fs.writeFileSync(workspace.dataFile, 'preserved accounting database');
+    const before = sha256(fs.readFileSync(workspace.dataFile));
+    const marker = path.join(workspace.directory, 'parent-ready.json');
+    const launcher = path.join(root, 'electron', 'updater', 'windowsInstaller.ts');
+    const options = {
+      stateDirectory: workspace.state,
+      helperPath: path.join(root, 'resources', 'updater', 'update-helper.ps1'),
+      currentExecutable: fixture.currentExecutable,
+    };
+    // This disposable process plays Electron: await readiness and then exit.
+    // Its real PowerShell child must keep running with no parent or pipe owner.
+    execFileSync(process.execPath, ['-e', `
+      const fs = require('node:fs');
+      const { launchWindowsUpdateHelper } = require('tsx/cjs/api').require(${JSON.stringify(launcher)}, ${JSON.stringify(__filename)});
+      const state = JSON.parse(fs.readFileSync(${JSON.stringify(fixture.statePath)}, 'utf8'));
+      launchWindowsUpdateHelper(state, { ...${JSON.stringify(options)}, parentPid: process.pid }).then(pid => {
+        fs.writeFileSync(${JSON.stringify(marker)}, JSON.stringify({ pid }));
+        process.exit(0);
+      }).catch(error => { console.error(error); process.exit(1); });
+    `], { cwd: root, windowsHide: true, stdio: 'pipe', timeout: 20000 });
+    const { pid } = JSON.parse(fs.readFileSync(marker, 'utf8'));
+    await expect.poll(() => { try { process.kill(pid, 0); return true; } catch { return false; } }, { timeout: 60000 }).toBe(false);
+    const log = fs.readFileSync(fixture.logPath, 'utf8');
+    expect(log).toContain('helper-ready');
+    expect(log).toContain('rollback-snapshot-created');
+    expect(log).toContain('installation-failed');
+    expect(log).toContain('rollback-restored');
+    expect(fs.readFileSync(fixture.currentExecutable, 'utf8')).toBe('old executable bytes');
+    expect(sha256(fs.readFileSync(workspace.dataFile))).toBe(before);
+  } finally { fs.rmSync(workspace.directory, { recursive: true, force: true }); }
+});
+
+test('the helper replaces a versioned executable and relaunches the new program', async () => {
+  test.skip(process.platform !== 'win32', 'Windows executable lifecycle');
+  const workspace = temporaryWorkspace();
+  try {
+    const fixture = installedFixture(workspace);
+    fs.rmSync(fixture.currentExecutable);
+    fs.rmSync(fixture.installer);
+    const payload = path.join(workspace.directory, 'new-version.exe');
+    const relaunched = path.join(workspace.directory, 'relaunched.txt');
+    const csString = value => '@"' + value.replaceAll('"', '""') + '"';
+    const psString = value => "'" + value.replaceAll("'", "''") + "'";
+    const programs = [
+      [fixture.currentExecutable, '[assembly: System.Reflection.AssemblyFileVersion("2.1.0.0")] public class OldWheat { public static void Main() {} }'],
+      [payload, `[assembly: System.Reflection.AssemblyFileVersion("2.2.0.0")] public class NewWheat { public static void Main(string[] args) { System.IO.File.WriteAllText(${csString(relaunched)}, string.Join(" ", args)); } }`],
+      [fixture.installer, `public class TestInstaller { public static void Main() { System.IO.File.Copy(${csString(payload)}, ${csString(fixture.currentExecutable)}, true); } }`],
+    ];
+    const compile = '$ErrorActionPreference = "Stop"; ' + programs.map(([file, source]) => `Add-Type -TypeDefinition ${psString(source)} -OutputAssembly ${psString(file)} -OutputType ConsoleApplication`).join('; ');
+    execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(compile, 'utf16le').toString('base64')], { windowsHide: true, stdio: 'pipe', timeout: 30000 });
+    fs.writeFileSync(workspace.dataFile, 'untouched profile');
+    const result = runUpdateHelper(fixture);
+    expect(result.code, result.stderr).toBe(0);
+    await expect.poll(() => fs.existsSync(relaunched)).toBe(true);
+    expect(fs.readFileSync(relaunched, 'utf8')).toBe('--updated');
+    expect(sha256(fs.readFileSync(fixture.currentExecutable))).toBe(sha256(fs.readFileSync(payload)));
+    const log = fs.readFileSync(fixture.logPath, 'utf8');
+    expect(log).toContain('installation-verified');
+    expect(log).toContain('productVersion=2.2.0.0');
+    expect((await serviceFor(workspace, '2.2.0', true).confirmSuccessfulStartup()).phase).toBe('updated');
+    expect(fs.readFileSync(workspace.dataFile, 'utf8')).toBe('untouched profile');
+  } finally { fs.rmSync(workspace.directory, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }); }
+});

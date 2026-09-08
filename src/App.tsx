@@ -1426,7 +1426,7 @@ function App() {
   };
 
   const switchCompany = async (companyId: string) => {
-    setActiveCompanyId(companyId);
+    clearTransientUiState();
     await load(companyId);
     notify("Société active mise à jour", "success");
   };
@@ -1892,7 +1892,7 @@ function App() {
 
         <AnimatePresence mode="wait">
           <motion.main
-            key={page}
+            key={`${currentCompany?.id ?? "workspace"}:${page}`}
             id="wheat-main"
             initial={{ opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}

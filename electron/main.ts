@@ -912,16 +912,13 @@ async function launchStagedUpdateAndExit(state: PersistedUpdateState) {
   if (internalRestartPending) return;
   internalRestartPending = true;
   shutdownPending = true;
-  mainWindow?.webContents.send("wheat:app:will-restart");
   const availableVersion = state.pending.release.version;
   let helperPid: number;
   try {
     state.pending.rollbackPath = path.join(resolveUpdaterStateDirectory(app), "rollback", state.pending.previousVersion);
     await updateService.store.write(state);
-    // The helper's first act is to block on Wait-Process until this process
-    // exits, so starting it before the shutdown drain costs nothing and keeps
-    // a failed launch fully recoverable: nothing has been torn down yet, and
-    // the app stays usable instead of closing on an update that never ran.
+    // Wait for script readiness before draining operations or notifying the
+    // renderer of shutdown. A failed helper leaves the running app usable.
     helperPid = await launchWindowsUpdateHelper(state, {
       stateDirectory: resolveUpdaterStateDirectory(app),
       helperPath: path.join(process.resourcesPath, "updater", "update-helper.ps1"),
@@ -935,7 +932,8 @@ async function launchStagedUpdateAndExit(state: PersistedUpdateState) {
     shutdownPending = false;
     throw error;
   }
-  await updateService.logger.log("helper-started-confirmed", { availableVersion, helperPid });
+  await updateService.logger.log("helper-ready-confirmed", { availableVersion, helperPid });
+  mainWindow?.webContents.send("wheat:app:will-restart");
   // The helper is now committed: it acts as soon as this process exits. Exiting
   // is therefore mandatory even if the drain fails, because staying alive would
   // leave it blocked forever and let a retry spawn a second one against the

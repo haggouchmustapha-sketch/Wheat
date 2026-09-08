@@ -167,8 +167,8 @@ test("a Moroccan accountant workflow remains consistent across subledgers, books
         purchases: items(purchases).map((item) => ({ no: item.invoiceNo, status: item.lifecycleStatus, balance: item.settlement.balanceCents })),
         paymentCount: items(payments).length,
         counterpartyCount: items(counterparties).length,
-        trialDebit: trial.totals.debitCents,
-        trialCredit: trial.totals.creditCents,
+        trialDebit: trial.totals.periodDebitCents,
+        trialCredit: trial.totals.periodCreditCents,
         trialBalanced: trial.balanced,
         dashboardRevenue: boot.dashboardMetrics.revenueCents,
         dashboardExpense: boot.dashboardMetrics.expensesCents,
@@ -177,7 +177,9 @@ test("a Moroccan accountant workflow remains consistent across subledgers, books
     expect(snapshot.sales).toEqual([{ no: "FV-2026-001", status: "POSTED", balance: "0" }]);
     expect(snapshot.purchases).toEqual([{ no: "FA-2026-001", status: "POSTED", balance: "30000" }]);
     expect(snapshot).toMatchObject({ paymentCount: 1, counterpartyCount: 2, trialBalanced: true, dashboardRevenue: "100000", dashboardExpense: "30000" });
-    expect(snapshot.trialDebit).toBe(snapshot.trialCredit);
+    // 1000 MAD sale + 300 MAD purchase + 1000 MAD receipt, on each side.
+    expect(snapshot.trialDebit).toBe("230000");
+    expect(snapshot.trialCredit).toBe("230000");
 
     await page.locator(".wt-rail").getByRole("button", { name: "Rapports comptables", exact: true }).click();
     await expect(page.getByRole("tab", { name: /Rapports/ })).toBeVisible({ timeout: 15000 });

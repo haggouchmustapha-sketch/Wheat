@@ -4,7 +4,6 @@ import {
   UpdateNetworkError,
   type PersistedUpdateState,
   type StagedUpdate,
-  type UpdateDownloadProgress,
   type UpdateProvider,
   type UpdateRelease,
   type UpdateStatus,
@@ -218,7 +217,7 @@ export class UpdateService {
       const stagingDirectory = path.join(this.options.stateDirectory, "staging", release.version);
       await fs.promises.rm(stagingDirectory, { recursive: true, force: true });
       await this.logger.log("download-started", { availableVersion: release.version, artifact: path.basename(release.artifact), declaredSize: release.artifactSize ?? null });
-      await this.setStatus({
+      const downloading = await this.setStatus({
         phase: "downloading",
         availableVersion: release.version,
         availableRelease: offerFrom(release),
@@ -229,7 +228,9 @@ export class UpdateService {
 
       let lastLoggedPercent = -1;
       const acquired = await this.options.provider.acquireUpdate(release, stagingDirectory, (progress) => {
-        void this.publishProgress(progress);
+        // Emit in transfer order. Async state reads could finish after verification
+        // began and silently discard the final progress event on fast downloads.
+        this.emit({ ...downloading.status, download: progress });
         // Logged in tenths so a long download leaves a readable trace rather
         // than a thousand near-identical lines.
         const decile = progress.percent === null ? -1 : Math.floor(progress.percent / 10) * 10;
@@ -356,20 +357,6 @@ export class UpdateService {
     }
     await this.logger.log("update-rejected", { reason: message });
     return this.setStatus({ phase: "error", lastCheckedAt: checkedAt, message: summary, error: message, download: undefined });
-  }
-
-  /**
-   * Progress goes to the window without touching disk.
-   *
-   * A download reports a hundred times; persisting each one would rewrite the
-   * state file a hundred times for a value that is meaningless the moment the
-   * application closes. What survives a restart is the *decision* — offered,
-   * ready — not how far a transfer had got.
-   */
-  private async publishProgress(download: UpdateDownloadProgress) {
-    const status = await this.getStatus();
-    if (status.phase !== "downloading") return;
-    this.emit({ ...status, download });
   }
 
   private async setStatus(patch: Partial<UpdateStatus>) {

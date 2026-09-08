@@ -1,4 +1,5 @@
 import { rendererSerialize, requireId } from "./accounting";
+import { LEDGER_ENTRY_STATUSES } from "./reporting";
 import { PCGE_SOURCE } from "./pcgeData";
 
 type PrismaLike = Record<string, any>;
@@ -161,7 +162,17 @@ export async function buildBalanceFamily(prisma: PrismaLike, payloadValue: unkno
   if (!fiscalYear) throw new Error("Aucun exercice ne couvre la date du rapport.");
   const start = payload.from ? day(payload.from, "La date de début") : fiscalYear.startsOn;
   if (start > to) throw new Error("La période du rapport est inversée.");
-  const statuses = Array.isArray(payload.statuses) && payload.statuses.length ? payload.statuses.map(String) : ["POSTED", "REVERSED"];
+  // A balance is a statement about the ledger, so it may only be built from
+  // ledger statuses. A caller narrowing the set is legitimate; a caller adding
+  // DRAFT — or a typo that silently empties the report — is not.
+  const statuses = Array.isArray(payload.statuses) && payload.statuses.length
+    ? payload.statuses.map(String).map((status) => {
+      if (!(LEDGER_ENTRY_STATUSES as readonly string[]).includes(status)) {
+        throw new Error(`Le statut « ${status} » n'appartient pas au grand livre : une balance se lit sur ${LEDGER_ENTRY_STATUSES.join(" et ")}.`);
+      }
+      return status;
+    })
+    : [...LEDGER_ENTRY_STATUSES];
   const journalIds = Array.isArray(payload.journalIds) ? payload.journalIds.map(String).slice(0, 100) : undefined;
   const lines = await reportLines(prisma, companyId, to, statuses, journalIds);
   let rows = groupBalance(lines, start, view === "AGED_CUSTOMERS" ? "AUXILIARY_CUSTOMERS" : view === "AGED_SUPPLIERS" ? "AUXILIARY_SUPPLIERS" : view);

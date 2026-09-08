@@ -81,8 +81,8 @@ import { FiscalWorkspace, WheatAiWorkspace } from "./components/FiscalWorkspace"
 import { WheatSelect, type WheatSelectOption } from "./components/ui/WheatSelect";
 import { WheatAiMark, WheatMark } from "./components/ui/brand";
 import { WheatAiProviderSettings } from "./components/WheatAiProviderSettings";
-import { WheatUpdateNotices } from "./components/WheatUpdate";
-import { formatUpdateDateTime, formatUpdateSize, updateStatusLabel } from "./lib/updateStatus";
+import { UpdateDownloadProgress, WheatUpdateNotices } from "./components/WheatUpdate";
+import { formatUpdateDateTime, updateStatusLabel } from "./lib/updateStatus";
 import {
   Badge,
   Button,
@@ -4306,7 +4306,7 @@ function CompaniesPage({ data, activeCompanyId, switchCompany, setCompanyModalOp
                           <li className="wt-list__item" key={year.id} style={{ paddingInline: 0 }}>
                             <span className="wt-list__item-text">
                               <strong>{year.label}</strong>
-                              <span>{year.status === "CLOSED" ? "Clôture : plus aucune écriture ne peut y être ajoutee" : year.lockedTo ? `Verrouillé jusqu'àu ${date(year.lockedTo)}` : "Ouvert, aucune période verrouillée"}</span>
+                              <span>{year.status === "CLOSED" ? "Clôture : plus aucune écriture ne peut y être ajoutée" : year.lockedTo ? `Verrouillé jusqu'au ${date(year.lockedTo)}` : "Ouvert, aucune période verrouillée"}</span>
                             </span>
                             <Badge tone={year.status === "CLOSED" ? "neutral" : "success"} dot>
                               {year.status === "CLOSED" ? "Clôture" : "Ouvert"}
@@ -4424,7 +4424,7 @@ function EntriesPage({ data, entries, openEntryModal, importEntries, notify, ref
           lockedTo: lockDate,
           throughDate: lockDate,
         });
-        notify(`Période verrouillée jusqu'àu ${date(lockDate)}`, "success");
+        notify(`Période verrouillée jusqu'au ${date(lockDate)}`, "success");
       }
       refresh();
     } catch (error) {
@@ -4509,13 +4509,13 @@ function EntriesPage({ data, entries, openEntryModal, importEntries, notify, ref
         ) : lockedTo ? (
           <div className="wt-row wt-row--between">
             <span>
-              La période est verrouillée jusqu'àu <strong>{date(lockedTo)}</strong>. Aucune écriture ne peut être ajoutee ou modifiée avant cette date.
+              La période est verrouillée jusqu'au <strong>{date(lockedTo)}</strong>. Aucune écriture ne peut être ajoutée ou modifiée avant cette date.
             </span>
             <Button variant="secondary" icon={<Lock size={15} />} onClick={() => setLockConfirm(true)}>Déverrouiller</Button>
           </div>
         ) : (
           <div className="wt-row" style={{ alignItems: "flex-end" }}>
-            <Field label="Verrouiller jusqu'àu" htmlFor="entries-lock-date" hint="Toutes les dates antérieures ou égales seront figées." className="wt-field--inline">
+            <Field label="Verrouiller jusqu'au" htmlFor="entries-lock-date" hint="Toutes les dates antérieures ou égales seront figées." className="wt-field--inline">
               <input id="entries-lock-date" type="date" className="wt-input" value={lockDate} onChange={(event) => setLockDate(event.target.value)} />
             </Field>
             <Button variant="secondary" icon={<Lock size={15} />} onClick={() => setLockConfirm(true)}>Verrouiller la période</Button>
@@ -4617,8 +4617,8 @@ function EntriesPage({ data, entries, openEntryModal, importEntries, notify, ref
           title={lockedTo ? "Déverrouiller la période ?" : "Verrouiller la période ?"}
           question={
             lockedTo
-              ? `La période est actuellement figee jusqu'àu ${date(lockedTo)}.`
-              : `Toutes les dates jusqu'àu ${date(lockDate)} incluses seront figees.`
+              ? `La période est actuellement figée jusqu'au ${date(lockedTo)}.`
+              : `Toutes les dates jusqu'au ${date(lockDate)} incluses seront figées.`
           }
           consequence={
             lockedTo
@@ -5670,6 +5670,50 @@ function BankStatementImportModal({ companyId, draft, onClose, onImported, onRec
   const [allowDuplicates, setAllowDuplicates] = useState(false);
   const [mappingRestored, setMappingRestored] = useState(false);
   const [report, setReport] = useState<any>(null);
+  /*
+   * The opening and closing balances the statement itself declares — MT940 and
+   * CAMT.053 carry them, CSV, Excel, OFX, QIF and scanned PDFs do not.
+   *
+   * When the file declares none, the accountant has them anyway: they are
+   * printed on the statement in their hand. Typing them buys two things Wheat
+   * could not otherwise offer for those formats — the import checks that
+   * opening + movements equals closing and refuses a statement with a missed or
+   * mistyped line, and the bank total gains a real bank balance to compare the
+   * ledger against, which is the whole point of a rapprochement.
+   *
+   * Left empty, nothing changes: Wheat never invents a balance it was not told.
+   */
+  const declared = draft.parsed.declaredBalances ?? {};
+  const fileDeclaresBalances = declared.openingBalanceCents !== undefined && declared.closingBalanceCents !== undefined;
+  const [statedBalances, setStatedBalances] = useState({ opening: "", closing: "" });
+
+  /**
+   * Reads a balance as the accountant writes it, sign included: a bank account
+   * can be overdrawn, so a leading minus is a real value and not a typo.
+   * Returns null for anything that is not a complete amount, so a half-typed
+   * figure is treated as "not stated" rather than as zero.
+   */
+  const balanceToCents = (value: string): string | null => {
+    const text = value.trim();
+    if (!text) return null;
+    const negative = text.startsWith("-");
+    const magnitude = tryParseExactDecimalCents(negative ? text.slice(1) : text);
+    if (magnitude === null) return null;
+    return (negative ? -magnitude : magnitude).toString();
+  };
+
+  /**
+   * Both balances or neither: the equation the import checks needs the two ends
+   * of it, and one alone would let a wrong figure through unchecked.
+   */
+  const statedBalancesPayload = () => {
+    const openingBalanceCents = balanceToCents(statedBalances.opening);
+    const closingBalanceCents = balanceToCents(statedBalances.closing);
+    return openingBalanceCents !== null && closingBalanceCents !== null ? { openingBalanceCents, closingBalanceCents } : {};
+  };
+
+  const statedBalancesIncomplete = Boolean(statedBalances.opening.trim() || statedBalances.closing.trim())
+    && Object.keys(statedBalancesPayload()).length === 0;
 
   /*
    * The column mapping somebody worked out, kept until the statement is
@@ -5752,6 +5796,7 @@ function BankStatementImportModal({ companyId, draft, onClose, onImported, onRec
     setError("");
     try {
       const result = await window.wheat.importBankStatement({
+        companyId,
         bankAccountId: draft.bankAccountId,
         sourceName: draft.file.name,
         sourceSha256: draft.sourceSha256,
@@ -5763,8 +5808,9 @@ function BankStatementImportModal({ companyId, draft, onClose, onImported, onRec
         // The balances the statement declares about itself, when it declares
         // them. The import service compares them against the movements it read
         // and refuses a statement that does not add up; sending nothing left
-        // that check permanently unavailable.
-        ...(draft.parsed.declaredBalances ?? {}),
+        // that check permanently unavailable. A format that declares none falls
+        // back to what the accountant read off the paper statement.
+        ...(fileDeclaresBalances ? declared : statedBalancesPayload()),
         allowSuspectedDuplicates: Boolean(review.duplicateCount && allowDuplicates),
       });
       setReport({
@@ -5934,6 +5980,54 @@ function BankStatementImportModal({ companyId, draft, onClose, onImported, onRec
                 <ul>{draft.parsed.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>
               </Callout>
             )}
+
+            <Card
+              title="Soldes déclarés par le relevé"
+              note={fileDeclaresBalances
+                ? "Ce format porte ses propres soldes : Wheat vérifiera que les mouvements lus les relient exactement."
+                : "Ce format ne porte aucun solde. Saisissez ceux imprimés sur votre relevé pour que Wheat contrôle l'import et puisse comparer banque et comptabilité."}
+              icon={<Scale size={18} aria-hidden="true" />}
+            >
+              {fileDeclaresBalances ? (
+                <div className="wt-grid wt-grid--narrow" data-testid="bank-import-declared-balances">
+                  <Stat label="Solde initial" value={formatExactCentsForUi(BigInt(declared.openingBalanceCents!), draft.parsed.currency ?? "MAD")} note="Lu dans le fichier" />
+                  <Stat label="Solde final" value={formatExactCentsForUi(BigInt(declared.closingBalanceCents!), draft.parsed.currency ?? "MAD")} note="Lu dans le fichier" />
+                </div>
+              ) : (
+                <>
+                  <Explainer>
+                    Facultatif, et vivement conseillé. Renseignés, Wheat refuse le relevé si <strong>solde initial + mouvements</strong> ne donne pas exactement le solde final — c'est ce qui attrape une ligne oubliée ou mal lue avant tout enregistrement. Laissés vides, l'import reste possible mais aucun solde bancaire ne pourra être comparé à la comptabilité. Un découvert se saisit avec le signe moins.
+                  </Explainer>
+                  <div className="wt-form-grid">
+                    <Field label="Solde initial du relevé" htmlFor="bank-opening-balance" optional>
+                      <input
+                        id="bank-opening-balance"
+                        className="wt-input"
+                        inputMode="decimal"
+                        placeholder="0.00"
+                        value={statedBalances.opening}
+                        onChange={(event) => setStatedBalances((current) => ({ ...current, opening: event.target.value }))}
+                      />
+                    </Field>
+                    <Field label="Solde final du relevé" htmlFor="bank-closing-balance" optional>
+                      <input
+                        id="bank-closing-balance"
+                        className="wt-input"
+                        inputMode="decimal"
+                        placeholder="0.00"
+                        value={statedBalances.closing}
+                        onChange={(event) => setStatedBalances((current) => ({ ...current, closing: event.target.value }))}
+                      />
+                    </Field>
+                  </div>
+                  {statedBalancesIncomplete && (
+                    <Callout tone="warning" title="Contrôle des soldes incomplet">
+                      Indiquez les deux soldes, ou aucun. Avec un seul, Wheat n'a pas les deux bouts de l'égalité et ne peut rien vérifier : l'import se fera sans ce contrôle.
+                    </Callout>
+                  )}
+                </>
+              )}
+            </Card>
 
             <Card
               title="Correspondance des colonnes"
@@ -6951,7 +7045,7 @@ function SettingsPage({ data, darkMode, setDarkMode, createBackup, restoreBackup
           title="Mises à jour"
           note="Wheat vérifie les mises à jour en arrière-plan. Rien n'est téléchargé ni installé sans votre accord."
           icon={<Download size={18} aria-hidden="true" />}
-          actions={<Badge tone={updateStatus?.phase === "error" ? "danger" : updateStatus?.phase === "ready" || updateStatus?.phase === "available" ? "brand" : "success"} dot>{updateStatusLabel(updateStatus)}</Badge>}
+          actions={<Badge tone={updateStatus?.error ? "danger" : updateStatus?.phase === "ready" || updateStatus?.phase === "available" ? "brand" : "success"} dot>{updateStatusLabel(updateStatus)}</Badge>}
           footer={
             <>
               <Button variant="secondary" busy={busyUpdate} icon={<RefreshCw size={15} />} disabled={busyUpdate} onClick={() => void checkForUpdates()}>
@@ -6980,17 +7074,10 @@ function SettingsPage({ data, darkMode, setDarkMode, createBackup, restoreBackup
               {updateStatus?.availableVersion && (
                 <div><dt>Version disponible</dt><dd>{updateStatus.availableVersion}</dd></div>
               )}
-              {updateStatus?.phase === "downloading" && updateStatus.download && (
-                <div>
-                  <dt>Téléchargement</dt>
-                  <dd>
-                    {updateStatus.download.percent === null
-                      ? `${formatUpdateSize(updateStatus.download.transferredBytes)} reçus`
-                      : `${updateStatus.download.percent} % — ${formatUpdateSize(updateStatus.download.transferredBytes)} / ${formatUpdateSize(updateStatus.download.totalBytes ?? 0)}`}
-                  </dd>
-                </div>
-              )}
             </dl>
+            {updateStatus?.phase === "downloading" && updateStatus.download && (
+              <UpdateDownloadProgress download={updateStatus.download} />
+            )}
             {updateStatus?.availableRelease && updateStatus.availableRelease.notes.length > 0 && (updateStatus.phase === "available" || updateStatus.phase === "ready") && (
               <>
                 <span className="wt-eyebrow">Nouveautés de la version {updateStatus.availableRelease.version}</span>
@@ -7000,7 +7087,15 @@ function SettingsPage({ data, darkMode, setDarkMode, createBackup, restoreBackup
               </>
             )}
             {updateStatus?.error && (
-              <Callout tone="danger" title="Impossible de vérifier les mises à jour">{updateStatus.error}</Callout>
+              <Callout
+                tone="danger"
+                title={updateStatus.phase === "ready"
+                  ? `L'installation n'a pas pu démarrer — Wheat ${updateStatus.currentVersion} n'a pas été modifié`
+                  : "Impossible de vérifier les mises à jour"}
+              >
+                {updateStatus.error}
+                {updateStatus.phase === "ready" && " La mise à jour vérifiée reste disponible : vous pouvez réessayer."}
+              </Callout>
             )}
             {updateStatus && !updateStatus.automaticInstallationEnabled && (
               <Callout tone="info" title="Installation automatique désactivée">

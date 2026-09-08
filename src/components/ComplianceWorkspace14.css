@@ -350,6 +350,13 @@
 
 .compliance14-message { gap: 8px; margin-top: 10px; padding: 9px 11px; border-radius: 5px; font-size: 10px; }
 .compliance14-message.is-error { border: 1px solid rgb(var(--red-rgb) / .25); color: var(--red); background: rgb(var(--red-rgb) / .07); }
+/* The left pane of the split can be as narrow as the grid allows, so this
+   notice wraps onto its own lines rather than pushing its row wider than the
+   pane and out of the window. */
+.compliance14-message.is-info { flex-wrap: wrap; border: 1px solid rgb(var(--brand-rgb) / .25); color: var(--text); background: rgb(var(--brand-rgb) / .07); }
+.compliance14-message.is-info span { min-width: 0; flex: 1 1 100%; }
+.compliance14-message.is-info button { max-width: 100%; padding: 4px 9px; border: 1px solid rgb(var(--brand-rgb) / .35); border-radius: 4px; font-weight: 600; }
+.compliance14-message.is-info button:disabled { opacity: .55; cursor: default; }
 .compliance14-message span { flex: 1; }
 .compliance14-message button { border: 0; color: inherit; background: transparent; cursor: pointer; }
 .compliance14-loading { justify-content: center; gap: 8px; min-height: 400px; color: var(--c14-muted); font-size: 11px; }

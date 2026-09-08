@@ -56,9 +56,14 @@ export function updateStatusLabel(status?: WheatUpdateStatusView | null) {
     available: `Version ${status.availableVersion ?? "plus récente"} disponible`,
     downloading: "Téléchargement de la mise à jour…",
     verifying: "Vérification de la mise à jour…",
-    ready: status.automaticInstallationEnabled
-      ? "La mise à jour est prête"
-      : "Mise à jour vérifiée (installation désactivée dans cette version)",
+    // A verified update that could not be launched is still `ready` — the
+    // artifact is staged and a retry is one press away — but saying "prête"
+    // after an attempt just failed would read as if nothing had happened.
+    ready: status.error
+      ? "L'installation n'a pas pu démarrer"
+      : status.automaticInstallationEnabled
+        ? "La mise à jour est prête"
+        : "Mise à jour vérifiée (installation désactivée dans cette version)",
     installing: "Installation de la mise à jour…",
     "awaiting-confirmation": "Vérification de la nouvelle version…",
     updated: `Mise à jour vers ${status.currentVersion} réussie`,

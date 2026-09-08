@@ -53,6 +53,26 @@
   color: var(--text);
 }
 
+/* The Windows installer publishes no progress of its own, so this bar claims
+   none: it travels a fixed loop to show the step is running and never pretends
+   to be a position. */
+.wheat-update__bar--indeterminate .wheat-update__bar-fill {
+  width: 35%;
+  transition: none;
+  animation: wheat-update-indeterminate 1.4s ease-in-out infinite;
+}
+
+@keyframes wheat-update-indeterminate {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .wheat-update__bar-fill { transition: none; }
+  /* No motion at all: a static partial fill still reads as "in progress". */
+  .wheat-update__bar--indeterminate .wheat-update__bar-fill {
+    animation: none;
+    width: 100%;
+    opacity: 0.45;
+  }
 }

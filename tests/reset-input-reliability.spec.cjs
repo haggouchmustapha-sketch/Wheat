@@ -118,3 +118,64 @@ test("emptying the app keeps text fields, dropdowns and focus usable without a r
     fs.rmSync(temporary, { recursive: true, force: true });
   }
 });
+
+/**
+ * Resetting the workspace reloads the window, and the reload's first read can
+ * land inside the tail of the reset that caused it. That read must wait for the
+ * maintenance to finish rather than refuse — an accountant who resets the
+ * workspace should get a loaded window, never "réessayez dans un instant".
+ */
+test("a read racing the tail of a workspace reset waits for it instead of refusing", async () => {
+  test.setTimeout(120000);
+
+  const cwd = process.env.WHEAT_CWD ?? path.resolve(__dirname, "..");
+  const electronExe = path.join(cwd, "node_modules", "electron", "dist", "electron.exe");
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "wheat-reset-race-"));
+  const rendererErrors = [];
+  const app = await electron.launch({
+    executablePath: electronExe,
+    args: [cwd],
+    cwd,
+    env: { ...process.env, WHEAT_USER_DATA_DIR: path.join(temporary, "userData") },
+  });
+
+  try {
+    const page = await app.firstWindow();
+    page.on("pageerror", (error) => rendererErrors.push(error.message));
+    page.on("console", (entry) => { if (entry.type() === "error") rendererErrors.push(entry.text()); });
+    await page.waitForFunction(() => Boolean(window.wheat), null, { timeout: 15000 });
+
+    // Reads fired against the reset itself, not merely after it: the window
+    // that used to be refused is the one between the reset starting and its
+    // last write landing.
+    const outcomes = await page.evaluate(async () => {
+      const api = window.wheat;
+      const results = [];
+      const record = async (label, run) => {
+        try { await run(); results.push({ label, ok: true }); }
+        catch (error) { results.push({ label, ok: false, message: String(error?.message ?? error) }); }
+      };
+      const reset = record("reset", () => api.resetWorkspace({ mode: "demo" }));
+      const reads = [
+        record("bootstrap-during", () => api.getBootstrap()),
+        record("bootstrap-during-2", () => api.getBootstrap()),
+      ];
+      await Promise.all([reset, ...reads]);
+      await record("bootstrap-after", () => api.getBootstrap());
+      return results;
+    });
+
+    for (const outcome of outcomes) {
+      expect(outcome.message ?? "", `${outcome.label} was refused`).not.toMatch(/maintenance/i);
+      expect(outcome.ok, `${outcome.label} failed: ${outcome.message ?? ""}`).toBe(true);
+    }
+
+    // And the reload the reset triggers in the real app loads cleanly.
+    await page.reload();
+    await page.waitForFunction(() => Boolean(window.wheat), null, { timeout: 15000 });
+    await expect(page.locator(".app-shell")).toBeVisible({ timeout: 20000 });
+    expect(rendererErrors.filter((message) => /maintenance/i.test(message))).toEqual([]);
+  } finally {
+    await app.close();
+  }
+});

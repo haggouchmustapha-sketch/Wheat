@@ -83,6 +83,35 @@ export function parseIsoDay(value: unknown, label: string): Date {
   return date;
 }
 
+// The house shape for a Prisma client or an open transaction, matching the
+// other shared helpers (audit13, pieceNumbering21).
+type PrismaLike = Record<string, any>;
+
+/**
+ * The single rule deciding whether a date may still receive accounting: the
+ * date belongs to a fiscal year, that year is open, and the date sits after
+ * any period lock. Every posting path shares it — a path that grows its own
+ * copy is a path that will one day forget the lock, which is exactly how
+ * à-nouveaux once landed inside a locked period.
+ */
+export async function assertPostingPeriodOpen(
+  tx: PrismaLike,
+  companyId: string,
+  date: Date,
+  label = "La date de comptabilisation",
+): Promise<any> {
+  const fiscalYear = await tx.fiscalYear.findFirst({
+    where: { companyId, startsOn: { lte: date }, endsOn: { gte: date } },
+    orderBy: { startsOn: "desc" },
+  });
+  if (!fiscalYear) throw new Error(`${label} ne correspond à aucun exercice comptable.`);
+  if (fiscalYear.status !== "OPEN") throw new Error(`L'exercice « ${fiscalYear.label} » est clôturé.`);
+  if (fiscalYear.lockedTo && date <= fiscalYear.lockedTo) {
+    throw new Error(`La période est verrouillée jusqu'au ${fiscalYear.lockedTo.toISOString().slice(0, 10)} inclus.`);
+  }
+  return fiscalYear;
+}
+
 export function parsePayrollPeriod(value: unknown): { period: string; endDate: Date } {
   if (typeof value !== "string" || !/^\d{4}-(0[1-9]|1[0-2])$/.test(value)) {
     throw new Error("La période de paie doit être au format AAAA-MM.");

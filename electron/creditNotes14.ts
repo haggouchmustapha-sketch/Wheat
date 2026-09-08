@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { ENTRY_STATUS, optionalText, parseAccountingDate, provisionalEntryNumber, requireId, requireText } from "./accounting";
+import { ENTRY_STATUS, assertPostingPeriodOpen, optionalText, parseAccountingDate, provisionalEntryNumber, requireId, requireText } from "./accounting";
 import { appendActivityAndAudit, canonicalAuditJson } from "./audit13";
 import { generateCreditNotePdf14, sha256Hex14, type CreditNotePdfSnapshot } from "./creditNotePdf14";
 import { allocatePieceNumber } from "./pieceNumbering21";
@@ -419,12 +419,6 @@ function inheritedLines(original: any, normalized: NormalizedCreditPayload) {
   });
 }
 
-async function validateFiscalDate(tx: any, companyId: string, date: Date) {
-  const fiscalYear = await tx.fiscalYear.findFirst({ where: { companyId, startsOn: { lte: date }, endsOn: { gte: date } } });
-  if (!fiscalYear) throw new Error("La date de l'avoir ne correspond à aucun exercice comptable.");
-  if (fiscalYear.status !== "OPEN") throw new Error(`L'exercice « ${fiscalYear.label} » est clôturé.`);
-  if (fiscalYear.lockedTo && date <= fiscalYear.lockedTo) throw new Error(`La période est verrouillée jusqu'au ${fiscalYear.lockedTo.toISOString().slice(0, 10)} inclus.`);
-}
 
 async function validateActiveAccounts(tx: any, companyId: string, ids: string[], context: string) {
   const unique = [...new Set(ids.filter(Boolean))];
@@ -474,7 +468,7 @@ async function createPostedCreditEntry(tx: any, input: {
   now: Date;
 }) {
   const { credit, original } = input;
-  await validateFiscalDate(tx, credit.companyId, credit.invoiceDate);
+  await assertPostingPeriodOpen(tx, credit.companyId, credit.invoiceDate, "La date de l'avoir");
   const journalCode = credit.kind === "SALE" ? "VE" : "AC";
   const journal = await tx.journal.findUnique({ where: { companyId_code: { companyId: credit.companyId, code: journalCode } } });
   if (!journal) throw new Error(`Le journal ${journalCode} n'est pas configuré.`);
@@ -961,7 +955,7 @@ export function createCreditNotes14Service(options: CreditNotes14ServiceOptions)
         if (credit.kind === "PURCHASE" && !credit.invoiceNo) throw new Error("La référence de l'avoir fournisseur est obligatoire.");
         const capacity = await calculateCreditCapacity14(tx, original, id);
         validateRequestedCredit(original, normalized, capacity);
-        await validateFiscalDate(tx, companyId, credit.invoiceDate);
+        await assertPostingPeriodOpen(tx, companyId, credit.invoiceDate, "La date de l'avoir");
         await allocateSaleCreditNumber(tx, credit);
         credit = await tx.invoice.findUniqueOrThrow({ where: { id }, include: creditInclude });
         const postedAt = now();

@@ -217,6 +217,12 @@ type ReconciliationWorkspace = {
   companyId: string;
   accounts: ReconciliationAccount[];
   movements: ReconciliationMovement[];
+  // What the service actually holds versus what it sent. A long history is
+  // returned as a window over the most recent movements, with every item still
+  // carrying work placed inside it first.
+  movementCount?: number;
+  truncated?: boolean;
+  movementLimit?: number;
   generatedAt?: string;
 };
 
@@ -1866,6 +1872,9 @@ export function ReconciliationWorkbench({ companyId, initialBankAccountId, initi
         companyId,
         accounts: Array.isArray(next?.accounts) ? next.accounts : [],
         movements: Array.isArray(next?.movements) ? next.movements : [],
+        movementCount: typeof next?.movementCount === "number" ? next.movementCount : undefined,
+        truncated: Boolean(next?.truncated),
+        movementLimit: typeof next?.movementLimit === "number" ? next.movementLimit : undefined,
         generatedAt: next?.generatedAt,
       };
       if (requestId !== workspaceRequestId.current) return undefined;
@@ -2149,6 +2158,19 @@ export function ReconciliationWorkbench({ companyId, initialBankAccountId, initi
       </header>
 
       <OperationNotice notice={notice} onClose={clearNotice} />
+
+      {workspace?.truncated && (
+        <div className="op-legacy-banner" role="status" data-testid="reconciliation-truncated">
+          <AlertTriangle size={18} />
+          <div>
+            <strong>{workspace.movementCount} mouvements dans ce dossier, {workspace.movements.length} affichés</strong>
+            <span>
+              Tout mouvement restant à rapprocher est affiché : la fenêtre ne masque que de l’historique déjà lettré.
+              Filtrez par compte bancaire ou par relevé pour retrouver un mouvement ancien déjà rapproché.
+            </span>
+          </div>
+        </div>
+      )}
 
       {(workspace?.movements ?? []).some((movement) => movement.reconciliation.status === "REVIEW_REQUIRED") && (
         <div className="op-legacy-banner" role="status"><AlertTriangle size={18} /><div><strong>Ancien lettrage à contrôler</strong><span>Les statuts « rapproché » des versions anterieures a Wheat 2.0 n’ont pas été convertis en preuve comptable. Ouvrez chaque mouvement et confirmez une allocation réelle.</span></div></div>

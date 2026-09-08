@@ -12,6 +12,8 @@ const reports = tsxRequire(path.join(root, "electron", "reporting21.ts"), __file
 const fiscal = tsxRequire(path.join(root, "electron", "fiscal21.ts"), __filename);
 const localAi = tsxRequire(path.join(root, "electron", "wheatAi.ts"), __filename);
 const smartOcr = tsxRequire(path.join(root, "electron", "smartOcr.ts"), __filename);
+const accounting = tsxRequire(path.join(root, "electron", "accounting.ts"), __filename);
+const compliance = tsxRequire(path.join(root, "electron", "compliance14.ts"), __filename);
 
 test("PCGE 2.1 contains the pinned 0-9 hierarchy and accent-insensitive search data", () => {
   expect(pcge.PCGE_ACCOUNTS).toHaveLength(1134);
@@ -130,6 +132,113 @@ test("opening preview carries only balance-sheet accounts and blocks unassigned 
   expect(preview.profitLossCents).toBe(2000n);
   expect(preview.canPost).toBe(false);
   expect(preview.warnings.join(" ")).toMatch(/affectation vérifié/i);
+});
+
+test("one shared rule decides whether a date may still receive accounting", async () => {
+  const year = (overrides) => ({
+    fiscalYear: { findFirst: async () => overrides === null ? null : ({
+      id: "fy", label: "2026", startsOn: new Date("2026-01-01T00:00:00Z"), endsOn: new Date("2026-12-31T00:00:00Z"),
+      status: "OPEN", lockedTo: null, ...overrides,
+    }) },
+  });
+  const march = new Date("2026-03-15T00:00:00Z");
+
+  expect((await accounting.assertPostingPeriodOpen(year({}), "company", march)).label).toBe("2026");
+
+  await expect(accounting.assertPostingPeriodOpen(year(null), "company", march))
+    .rejects.toThrow(/aucun exercice comptable/i);
+  await expect(accounting.assertPostingPeriodOpen(year({ status: "CLOSED" }), "company", march))
+    .rejects.toThrow(/clôturé/i);
+  await expect(accounting.assertPostingPeriodOpen(year({ lockedTo: new Date("2026-03-31T00:00:00Z") }), "company", march))
+    .rejects.toThrow(/verrouillée jusqu'au 2026-03-31 inclus/);
+
+  // The lock is inclusive of its own day and lets the next one through.
+  await expect(accounting.assertPostingPeriodOpen(year({ lockedTo: march }), "company", march)).rejects.toThrow(/verrouillée/i);
+  expect(await accounting.assertPostingPeriodOpen(year({ lockedTo: new Date("2026-03-14T00:00:00Z") }), "company", march)).toBeTruthy();
+
+  // The label names what is being refused, so the message fits its caller.
+  await expect(accounting.assertPostingPeriodOpen(year(null), "company", march, "La date de l'avoir"))
+    .rejects.toThrow(/^La date de l'avoir ne correspond/);
+});
+
+test("à-nouveaux are refused by a period lock covering the first day of the year", async () => {
+  const target = { id: "fy-2026", companyId: "company", label: "2026", startsOn: new Date("2026-01-01T00:00:00Z"), endsOn: new Date("2026-12-31T00:00:00Z"), status: "OPEN", lockedTo: new Date("2026-01-31T00:00:00Z") };
+  const source = { id: "fy-2025", companyId: "company", label: "2025", startsOn: new Date("2025-01-01T00:00:00Z"), endsOn: new Date("2025-12-31T00:00:00Z"), status: "CLOSED" };
+  const tx = {
+    fiscalYear: { findFirst: async ({ where }) => where.id ? target : source },
+    entryLine: { findMany: async () => [
+      { accountId: "asset", debitCents: 10000n, creditCents: 0n, account: { id: "asset", code: "234", label: "Actif", reportNature: "BALANCE_SHEET" } },
+      { accountId: "capital", debitCents: 0n, creditCents: 10000n, account: { id: "capital", code: "111", label: "Capital", reportNature: "BALANCE_SHEET" } },
+    ] },
+    account: { findFirst: async () => null },
+  };
+  const preview = await fiscal.previewOpeningBalance(tx, { companyId: "company", fiscalYearId: target.id });
+  // The rows still balance; what stops the posting is the lock, and the preview
+  // says so instead of offering a button that cannot succeed.
+  expect(preview.differenceCents).toBe(0n);
+  expect(preview.periodLocked).toBe(true);
+  expect(preview.canPost).toBe(false);
+  expect(preview.warnings.join(" ")).toMatch(/verrouillée jusqu'au 2026-01-31 inclus/);
+});
+
+test("a balance is refused a status that does not belong to the ledger", async () => {
+  const prisma = {
+    fiscalYear: { findFirst: async () => ({ id: "fy", label: "2026", startsOn: new Date("2026-01-01T00:00:00Z"), endsOn: new Date("2026-12-31T00:00:00Z") }) },
+    entryLine: { findMany: async () => [] },
+  };
+  await expect(reports.buildBalanceFamily(prisma, { companyId: "company", view: "GENERAL", to: "2026-12-31", statuses: ["DRAFT"] }))
+    .rejects.toThrow(/n'appartient pas au grand livre/);
+  const narrowed = await reports.buildBalanceFamily(prisma, { companyId: "company", view: "GENERAL", to: "2026-12-31", statuses: ["POSTED"] });
+  expect(narrowed.filters.statuses).toEqual(["POSTED"]);
+});
+
+test("the Moroccan VAT starter is a proposal to review, never an applied rule", () => {
+  const starter = compliance.MOROCCAN_VAT_STARTER;
+  // Wheat states no rate of its own: it offers the structure the CGI is read
+  // through, and says so in the citation the accountant must confirm.
+  expect(starter.rates.map((rate) => rate.rateBps)).toEqual([2000, 1400, 1000, 700]);
+  expect(starter.accountingBasis).toBe("COLLECTION");
+  expect(starter.sourceReference).toMatch(/Code Général des Impôts/);
+  expect(starter.sourceReference).toMatch(/[Vv]érifiez/);
+  // Collected and deductible never share an account.
+  expect(starter.collectedAccountCode).not.toBe(starter.deductibleAccountCode);
+});
+
+test("a dossier is offered the starter only while it has no configuration of its own", async () => {
+  const accounts = [
+    { id: "a-445500", code: "445500", label: "Etat - TVA facturee" },
+    { id: "a-345520", code: "345520", label: "TVA recuperable sur charges" },
+  ];
+  const workspaceFor = async (configurationCount, available = accounts) => {
+    const prisma = {
+      company: { findUnique: async () => ({ id: "company", name: "Dossier", vatFrequency: "MONTHLY", baseCurrency: "MAD" }) },
+      account: { findFirst: async ({ where }) => available.find((row) => row.code === where.code) ?? null },
+      taxConfigurationVersion: { count: async () => configurationCount, findMany: async () => [] },
+      vatWorkpaper: { count: async () => 0, findMany: async () => [] },
+      fiscalYear: { count: async () => 0, findMany: async () => [] },
+      fiscalCloseRun: { count: async () => 0, findMany: async () => [] },
+      auditChain: { findUnique: async () => null, findFirst: async () => null },
+      auditSeal: { count: async () => 0, findMany: async () => [] },
+      invoice: { count: async () => 0, findMany: async () => [] },
+    };
+    const service = compliance.createCompliance14Service({ getPrisma: async () => prisma });
+    return service.taxWorkspace({ companyId: "company" });
+  };
+
+  const fresh = await workspaceFor(0);
+  expect(fresh.starterProposal).toBeTruthy();
+  // Eight rules: four rates, each in both directions, each on its own account.
+  expect(fresh.starterProposal.rates).toHaveLength(8);
+  expect(fresh.starterProposal.rates.filter((rate) => rate.direction === "COLLECTED").every((rate) => rate.accountId === "a-445500")).toBe(true);
+  expect(fresh.starterProposal.rates.filter((rate) => rate.direction === "DEDUCTIBLE").every((rate) => rate.accountId === "a-345520")).toBe(true);
+  // A collected rule is never deductible.
+  expect(fresh.starterProposal.rates.filter((rate) => rate.direction === "COLLECTED").every((rate) => rate.deductibilityBps === 0)).toBe(true);
+  expect(fresh.starterProposal.notice).toMatch(/ni enregistrée ni activée/);
+
+  // Once the dossier has decided for itself, Wheat stops proposing.
+  expect((await workspaceFor(1)).starterProposal).toBeNull();
+  // And it proposes nothing it cannot bind to real accounts.
+  expect((await workspaceFor(0, [accounts[0]])).starterProposal).toBeNull();
 });
 
 test("local model manifest is immutable, hashed and recommends only eligible tiers", async () => {

@@ -1,180 +1,92 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Wheat is a Windows-first, local-first Electron accounting app for Moroccan small businesses and fiduciaires.
 
-## What this is
+**Stack:** Electron + React 19 + TypeScript + Vite + Prisma/SQLite.  
+**User data:** `%APPDATA%\Wheat\`  
+**Renderer bridge:** `window.wheat` only.
 
-Wheat is a Windows-first, local-first Electron desktop accounting app for Moroccan small businesses and fiduciaires. Stack: Electron + React 19 + TypeScript + Vite + Prisma/SQLite. No cloud account, no subscription — everything runs on the user's machine. The app is not certified by the DGI; it doesn't replace review by a qualified accountant.
+## Core rules
 
-The profile directory is `%APPDATA%\Wheat\`. An installation created before the rename keeps its data: on first launch `electron/profileMigration.ts` moves `%APPDATA%\Wheat\` across with a single atomic directory rename, then renames `atlas-ledger.sqlite` to `wheat.sqlite` and the log files to match. The rename is re-attempted every launch, and `resolveProfileDatabaseFile` opens the old database name meanwhile, so an interrupted migration is always recoverable. If both directories exist the new one wins and the old one is left untouched.
+- `electron/main.ts` and `electron/*` own Prisma, filesystem/OS access, and business logic.
+- `src/` is the renderer and must access privileged features only through `electron/preload.ts` IPC methods (`wheat:<domain>:<action>`).
+- `prisma/schema.prisma` is the source of truth for domain models. Regenerate Prisma after schema changes.
+- Money is stored as exact `BigInt` centimes. Never use JS floating-point for accounting amounts; use the existing exact-decimal helpers.
+- Accounting history is append-only/audit-chained. Never hard-delete or silently rewrite posted history; corrections use the existing reversal/extourne/credit-note flows.
+- Preserve dossier isolation, period locks, double-entry balance, and existing domain validation.
+- Use `src/styles/tokens.css` for design tokens instead of ad-hoc styling where practical.
+- Never edit generated Prisma client files.
 
-`window.wheat` is the only renderer bridge — the former `window.atlas` alias is gone.
+## Before changing a subsystem
 
-Values written into user data before the rename are never rewritten: `AuditEvent.action` is hashed into the SHA-256 audit chain, and backups and PDF artifacts are immutable. `electron/legacyDomainValues.ts` owns every old/new pair — Wheat writes the new value and reads both. `electron/runtimeEnvironment.ts` does the same for `WHEAT_*` environment variables, which still fall back to their old `ATLAS_*` names until Wheat 2.3.
+Read the existing implementation and its schema/types first. Prefer extending the current pattern over creating a parallel system.
 
-One Wheat string deliberately remains: `build.appId` / `WINDOWS_INSTALL_IDENTITY` = `ma.atlasledger.desktop`. That is the Windows AppUserModelID and NSIS install key, not branding; changing it would orphan existing installs and their shortcuts. It never reaches the UI.
+Important areas:
+- Accounting/domain logic: `electron/accounting.ts`, `subledger.ts`, `reconciliation.ts`, `reporting*.ts`, `fiscal*.ts`, `compliance*.ts`
+- OCR/import: `bankStatementImporter.ts`, `smartOcr.ts`, `paddleOcr.ts`
+- Audit: `audit13.ts`
+- Security: `securityBoundary.ts`, `localSecurity.ts`
+- AI: `wheatAi*.ts`
+- Renderer workspaces: `src/components/`
+- Field extraction/editing: `src/lib/smartFields.ts`
+
+## Review / mutation safety
+
+Every IPC channel exposed by `preload.ts` must be classified in `electron/wheatWorkflowRegistry.ts`; coverage tests enforce this.
+
+`electron/wheatReview.ts` is advisory around deterministic validation. AI review must never replace or weaken domain validation, invent legal/accounting facts, or mutate data by itself.
+
+## Drafts and guided setup
+
+- Form drafts are unfinished UI state, not accounting records. Preserve them across navigation/unmount; clear only after a confirmed successful write.
+- Respect stale-draft/version checks.
+- Do not bypass the dossier setup gate for new dossiers. Existing dossiers with accounting data and the `TEST` dossier remain exempt according to the current implementation.
+
+## Compatibility
+
+Do not casually rewrite legacy persisted values or Windows install identity. Existing installations and immutable audit/PDF/backup data must remain readable.
+
+If touching rename/profile migration compatibility, inspect:
+- `electron/profileMigration.ts`
+- `electron/legacyDomainValues.ts`
+- `electron/runtimeEnvironment.ts`
+
+## Updates and releases
+
+Do **not** publish, tag, bump a version, or create a release unless explicitly asked.
+
+For updater/release work, read `docs/wheat-release-process.md` and the existing `electron/updater/` implementation before changing anything.
+
+Non-negotiable updater rules:
+- User data in `%APPDATA%\Wheat\` must never be replaced or reset by an update.
+- Never add `prisma migrate reset` or database recreation to update paths.
+- Preserve signature/hash verification and the explicit check → download → install consent flow.
+- Source pushes and releases are separate operations.
+- Never embed GitHub credentials or release private keys in the app/repository.
+
+## Security
+
+Any change touching window creation, navigation, permissions, webviews, or IPC registration must preserve `electron/securityBoundary.ts`.
+
+Secrets must stay behind the main-process boundary. Wheat AI credentials use the OS credential vault and must never be returned raw to the renderer.
 
 ## Commands
 
 ```powershell
 npm install
-npm run dev              # prisma generate + vite --host 127.0.0.1 (Electron dev app)
-npm run build             # clean + prisma generate + tsc -b + vite build
-npm run lint               # eslint .
-npm run db:push            # prisma db push
-npm run db:seed            # tsx prisma/seed.ts
-npm run db:reset           # prisma migrate reset --force --skip-seed && db:seed
-npm run icon:ico           # regenerate build/icon.ico from source art
+npm run dev
+npm run build
+npm run lint
+npm run db:push
+npm run db:seed
+
+npm run test:desktop
+npm run test:ocr
+npm run test:updater
+
+npm run installer
+npm run portable
+npm run pack
 ```
 
-Packaging (each does db:reset + icon:ico + build first):
-
-```powershell
-npm run installer   # electron-builder --win nsis --x64
-npm run portable     # electron-builder --win portable --x64
-npm run pack          # electron-builder --dir (unpacked, for quick inspection)
-```
-
-Tests use Playwright against the packaged/built Electron app (`.spec.cjs` files under `tests/`). Most require a build first:
-
-```powershell
-npm run test:desktop    # db:reset + build, then tests/electron-smoke.spec.cjs
-npm run test:ocr           # db:reset + build, then tests/ocr-meaningful.spec.cjs
-npm run test:updater      # tests/updater.spec.cjs + tests/updater-electron.spec.cjs (no rebuild)
-```
-
-To run a single spec directly after a build:
-
-```powershell
-npx playwright test tests/wheat-reconciliation-unit.spec.cjs --reporter=line
-```
-
-PaddleOCR sidecar (optional local OCR engine, used for scanned bank-statement PDFs):
-
-```powershell
-npm run paddle:setup   # scripts/setup-paddleocr.ps1
-npm run paddle:check    # health-check the bundled python runtime
-```
-
-Releasing to users (see **Releases and updates** below — never run these unless explicitly told to publish):
-
-```powershell
-npm run release:prepare -- --notes docs/wheat-<version>-release-notes.md --sign ..\wheat-release-key.pem
-npm run release:publish
-```
-
-`release:prepare` builds the installer itself; add `--skip-build` to reuse one already in `release/<version>/`, and
-`--version <semver>` to bump (it rewrites `package.json`). `release:publish` uploads ~1.3 GB, so expect it to run well
-past any short command timeout — run it where it can finish.
-
-## Architecture
-
-**Process split.** `electron/main.ts` is the privileged main process: it owns the Prisma/SQLite connection, all business logic, and file/OS access. `src/` is the React renderer — it never touches Prisma or the filesystem directly. The only bridge between them is `electron/preload.ts`, which exposes a flat `window.wheat` object of `ipcRenderer.invoke` calls (one method per IPC channel, channels named `wheat:<domain>:<action>`). When adding a feature: add/extend an IPC handler in the relevant `electron/*.ts` module, register it in `main.ts`, expose it in `preload.ts`, then call it from a component via `window.wheat`.
-
-**Domain modules live in `electron/`, one file per subsystem**, e.g. `accounting.ts`, `subledger.ts`, `reconciliation.ts`, `reporting.ts` / `reporting21.ts`, `fiscal21.ts`, `compliance14.ts`, `chartOfAccounts21.ts`, `bankStatementImporter.ts`, `smartOcr.ts` / `paddleOcr.ts`, `archive.ts` (backup/restore), `localSecurity.ts` (PIN lock), `securityBoundary.ts` (IPC/frame/navigation hardening), `updater/` (self-update subsystem, its own directory — see **Releases and updates**), and the `wheatAi*.ts` files (local/OpenRouter/Groq-backed assistant: provider registry, capability registry, domain gateway, secrets). Numeric suffixes on filenames (`13`, `14`, `21`) mark the release iteration a module was introduced/reworked in — they are historical, not a versioning scheme to imitate for new files.
-
-**Money is exact-integer centimes.** Prisma models store amounts as `BigInt` centimes, never floats. `src/lib/exactDecimal.ts` and the electron-side equivalents parse/format exact decimal strings; new subledger/accounting inputs must reject JS floating-point and go through exact-decimal parsing at the service boundary.
-
-**Everything is append-only / audit-chained.** Posting, voiding, reconciling, and archiving never hard-delete or silently mutate history: corrections happen via linked reversal/extourne/credit-note entries, and operational changes append to a company-local SHA-256 audit chain (see `audit13.ts`). Keep this invariant when touching any posting/void/reversal path.
-
-**Prisma schema** (`prisma/schema.prisma`, ~1300 lines) is the single source of truth for the domain model — read it before assuming a shape for companies, fiscal years, accounts, journals, entries, invoices, payments, bank movements/reconciliation, tax/TVA configurations, or the audit chain. Regenerate the client (`npm run prisma:generate`, or just `npm run dev`/`build` which does it for you) after any schema change; generated client output lives at `src/generated/prisma` and should not be edited by hand.
-
-**Renderer structure.** `src/App.tsx` is the shell/router; feature screens are large per-workspace components in `src/components/` (e.g. `BooksWorkspace13`, `FiscalWorkspace`, `ComplianceWorkspace14`, `OperationalAccounting`, `WheatAiWorkspace`), each typically paired with its own `.css` file rather than a shared stylesheet. Design tokens (color, type, spacing, radii, shadows) are centralized in `src/styles/tokens.css` and drive both light and dark mode — prefer tokens over ad hoc values when styling.
-
-**Document fields.** `src/lib/smartFields.ts` owns how an extraction is shown and edited. The extraction pipeline decides which fields exist; this module only orders, labels and converts them, and any key it does not recognise is still displayed and still preserved on save. `vatRate` travels as basis points (2000 = 20 %) because `documentInvoiceDraft.ts` reads it back that way, so the module converts in both directions at the edge. Saving a correction sends only the fields that actually changed — the main process stamps confidence 100 on everything it receives and names it in the audit chain.
-
-**Shared review layer.** `electron/wheatWorkflowRegistry.ts` classifies every channel `preload.ts` exposes as `REVIEW_REQUIRED`, `DETERMINISTIC_ONLY` or `EXEMPT`, each with a written reason; `tests/wheat-workflow-coverage.spec.cjs` parses the preload source and fails if a channel is missing, so a new IPC channel cannot be added without deciding what review it gets. `electron/wheatReview.ts` runs that review: a deterministic domain preflight first (double-entry balance, HT + TVA = TTC, allocation bounds, period locks, dossier-scoped ids, duplicate identities), then — only if a model is genuinely reachable — a bounded contextual reading whose findings are dropped unless corroborated in the context supplied, capped at 70 % confidence, never able to emit a blocker and never allowed to propose a new date, rate, account or legal identifier. The review reads and returns an opinion; it never mutates, and the owning domain service re-validates everything inside its own transaction exactly as before. Model resolution is local-first (`resolveReviewModel` in `main.ts`): a healthy installed Ollama model, else a configured remote provider *with* the `assistedReviewRemoteConsent` preference, else an honest "AI review unavailable". A model reading is not attempted on every save: it runs when the deterministic pass already found something, when the workflow's `riskLevel` is 2 or 3, or when the person asked for a review rather than pressing save (`requested: true` on the payload) — otherwise the result carries `model.status: "NOT_NEEDED"`. The deterministic pass always runs, so the checks that can refuse an operation are unaffected. Provider and model identifiers never appear in the ordinary reading path: `model.message` is written without them and `model.detail` carries them for settings, diagnostics and the disclosure on the result dialog. The renderer reaches it through `window.wheat.reviewBeforeMutation` and shows one shared surface (`src/components/WheatReview.tsx`, driven by `src/lib/useWheatReview.tsx`).
-
-**Guided journey.** `electron/wheatJourney.ts` derives the fifteen-stage dossier journey from the records that already exist — counts and statuses — rather than from a stored checklist, which is why there is no migration for it. It marks a stage `NEEDS_ANSWER` exactly where Wheat must not guess (VAT filing rhythm, bank-to-ledger mapping) and returns the one focused question with why it is being asked and where the answer lives.
-
-**Unfinished work.** `electron/formDrafts.ts` + the `FormDraft` model hold what somebody has typed into a form and not yet submitted. It is deliberately not accounting data: no domain service reads it, nothing is posted or numbered from it, and it is not appended to the audit chain — typing is not something that happened to the books. A draft's identity is `(companyId, entity, draftKey)`, so concurrent unfinished items never overwrite each other, and the row cascades with its company so drafts cannot leak between dossiers. Edit drafts carry `baseVersion`; a draft started against a record that has since changed comes back `stale: true` and is shown rather than applied. The renderer uses one hook — `src/lib/useFormDraft.ts` (`useFormDraft`, and `useDraftedForm` for the open/type/submit pattern). The rule every caller follows: `clear()` is called *after* the domain service confirms a write, never in a `finally`, and never on unmount — unmounting flushes what is queued instead. Navigation must never delete a person's work.
-
-**Dossier setup gate.** `electron/wheatDossierSetup.ts` keeps a brand-new dossier in guided work until it has a fiscal year, a chart, journals and a VAT configuration, and the accountant has approved that foundation. Progress is derived from the records, as in `wheatJourney.ts`; only the two facts no record can show are stored, and they reuse `GuidedStepDecision` (`setup:situation`, `setup:unlocked`) rather than a new table. The gate is narrow on purpose: it never applies to a dossier that already holds entries, invoices or documents (so an update cannot lock existing installations out of live client files), never to a dossier whose company name is exactly `TEST`, opens permanently once approved, and fails open if its state cannot be read. The renderer restricts the rail to `guided`, `companies` and `settings` while `mode === "SETUP"` (`src/components/DossierSetupGate.tsx`).
-
-**Releases and updates.** Wheat updates itself from the GitHub Releases of
-**https://github.com/haggouchmustapha-sketch/Wheat** (default branch `main`). Source and published builds share
-that one repository, but a release binary is never a commit: `release/` is build output, installers reach users as
-release assets, and neither is committed. `docs/wheat-release-process.md` is the full runbook.
-
-Versions are `2.1.<YYMMDD><n>` — valid SemVer with the build date in the patch component, compared with `semver` and
-never as strings, so `2.10.0` is correctly newer than `2.9.0`. **2.1.260904 is the first release published this way**;
-anything newer must be greater than the newest published tag, which `release:prepare` checks against GitHub.
-
-*Where it is configured.* One place — the `repository` field of `package.json`. `electron/updater/releaseSource.ts`
-derives owner/repo/URLs for the application and `scripts/lib/releaseRepository.mjs` does the same for the tooling,
-so the two can never point at different repositories. Do not write the owner, the repo or a release URL anywhere else.
-
-*What Wheat trusts.* An Ed25519 signature over the release manifest, verified against `WHEAT_UPDATE_PUBLIC_KEY` compiled
-into `electron/updater/signature.ts`; then SHA-256 and size over the downloaded bytes. GitHub is infrastructure, not
-authority — it serves the bytes and cannot choose them. The artifact URL is *built by Wheat* from the repository, the
-tag and the manifest's file name; a manifest never supplies a location. Redirects are followed only to GitHub's own
-download hosts. **No GitHub credential of any kind is ever compiled into Wheat.exe**; publishing uses the operator's own
-`gh` login on the release machine, and the Ed25519 private key lives outside the repository (`../wheat-release-key.pem`).
-
-The key is configured. If it is ever regenerated, paste the **whole PEM including the BEGIN/END lines** —
-`createPublicKey` rejects a bare base64 body, and it does so at runtime on the accountant's machine, where it reads as
-"every update refused" with nothing to point at. This has happened once. Two things now catch it before release:
-`tests/updater-signature.spec.cjs` fails if the compiled key is present but unusable, and `release:prepare` refuses to
-write a plan whose signature does not verify against that key. An empty key still fails closed.
-
-*Three decisions, never one.* `electron/updater/service.ts` deliberately separates check, download and install, because
-each is the accountant's call: a check may run unattended and downloads nothing; `downloadOfferedUpdate()` runs because
-somebody pressed "Mettre à jour"; `installStagedUpdate()` runs because somebody pressed "Redémarrer et installer", and
-is the only thing that closes Wheat. Never restore an escalation from one to the next — somebody halfway through an
-invoice must not lose it to a background update. Phases are `idle → checking → up-to-date | available → downloading →
-verifying → ready → installing → updated`, surfaced by `src/components/WheatUpdate.tsx` with copy and units in
-`src/lib/updateStatus.ts`. Download progress is real transferred bytes; when no size was declared there is no percentage
-and no bar rather than an invented one. Before restarting, the renderer calls `flushAllFormDrafts()` from
-`src/lib/useFormDraft.ts` — the existing draft system, never a second one.
-
-*The tag must name the source that built the binary.* A release tag is a claim about which commit produced an
-installer, and an unverifiable claim is worse than none: it looks authoritative while misleading anyone trying to
-reproduce, debug, audit or roll back a build, and under the GPL it is the pointer to the corresponding source.
-`release:prepare` records HEAD, branch and cleanliness into `publish-plan.json` (`readSourceProvenance` in
-`scripts/lib/releaseRepository.mjs`); `release:publish` re-checks all of it and refuses unless the release was prepared
-inside a Git repository, from a clean tree, at a commit that is still HEAD, and that commit is already on remote `main`.
-`gh release create` is then given `--target <commit>` explicitly — without it GitHub tags whatever the default branch
-happens to point at when the request lands, which is exactly how a binary ends up tagged against source it did not come
-from. Local checks run before any network call, so a refusal never half-touches GitHub.
-
-*Failure is always survivable.* Update checking is auxiliary: no connection, an unreachable GitHub, a rate limit, a
-malformed manifest or a deleted release all leave Wheat completely usable, and an unattended check that could not reach
-the server stays silent (a check somebody asked for reports plainly). A failed install returns to `ready` with the
-verified artifact intact, and `resources/updater/update-helper.ps1` snapshots program files and rolls back.
-
-*User data is never part of an update.* An update replaces `Wheat.exe`, `app.asar` and bundled runtime files under the
-install directory. Dossiers, the database, documents, drafts, settings and backups live in `%APPDATA%\Wheat\`, which the
-installer never writes to. Schema changes go through the existing startup engine (`migrateAndValidateDatabase` in
-`electron/database.ts`): a copy before every pending migration, transactional apply, and a refusal that names the backup
-path on failure. Never add `prisma migrate reset` or any database recreation to an update path.
-
-*Source pushes and releases are different things.* Committing and pushing source is ordinary work, done when asked.
-Publishing a release is a separate, explicit instruction ("Publish the Wheat update"). Do not bump the version, create a
-tag, or publish a release merely because updater code changed. When told to publish: run `npm run release:prepare`
-with written release notes and the signing key, read the printed plan, then `npm run release:publish`. Publish fails
-closed on skipped tests, an unsigned manifest, a changed artifact, a signature the compiled-in key does not verify, an
-existing tag, a version that is not newer, or any break in source/tag correspondence. A rebuild alone is not a prepared
-release: `npm run installer` produces the installer and electron-builder's own `latest.yml`, which **Wheat's updater
-never reads** — the signed manifest Wheat does read is `latest.json`, and only `release:prepare` writes it.
-
-*What is not committed.* `npm run paddle:setup` fills `resources/paddleocr/runtime/` and `models/` with a portable
-Python interpreter and warmed OCR models — about 2.1 GB, reproducible from `requirements.txt`, and ignored (the sidecar's
-own README says so; `.gitignore` enforces it). `worker.py`, `xls_reader.py`, `requirements.txt` and `README.md` beside
-them *are* source. Also ignored: build and release output, local databases, and `/main.js`, a stray copy of the bundled
-main process that lands at the repo root during builds (the real entry point is `dist-electron/main.js`). Before a first
-commit in a fresh clone, check `git status` rather than trusting `git add -A`: ignore rules do not apply to paths already
-staged, so anything added before the rule existed stays staged until `git rm --cached` removes it.
-
-*Known cost.* The installer is ~1.3 GB, and `resources/paddleocr` is about two thirds of it. That was tolerable for a
-USB-stick install and is heavy as an update payload — every accountant downloads it in full, and GitHub's per-asset
-ceiling is 2 GB. The updater deliberately does not work around this (it verifies whole artifacts; a delta scheme would be
-a new trust surface). The fix belongs in packaging; `docs/wheat-release-process.md` lists the options.
-
-*Testing.* `npm run test:updater` covers the provider contracts (`updater-github`, `updater-https`), the signature
-(`updater-signature`), the service and Windows helper (`updater`), the release tooling's refusals
-(`updater-release-tooling`), user-data survival across the whole lifecycle (`updater-user-data`), and the consent flow in
-a real window (`updater-electron`). Adding an IPC channel also requires an entry in `electron/wheatWorkflowRegistry.ts`.
-
-**Security boundary.** `electron/securityBoundary.ts` enforces a single trusted app instance, validates the main frame for IPC, and blocks popups/navigation/webview creation/permission requests. Any change touching window creation, navigation, or IPC registration should be checked against this module.
-
-**Wheat AI.** Providers (local model, OpenRouter, Groq) are abstracted behind `wheatAiProviderService.ts`/`wheatAiProviders.ts`; credentials go through the OS credential vault via `wheatAiSecrets.ts` and are never returned to the renderer — only masked metadata crosses the IPC bridge. `wheatAiCapabilityRegistry.ts` and `wheatAiDomainGateway.ts` define what the assistant is allowed to see/do against the accounting domain.
+Run the relevant tests after changes. Do not publish a release as part of ordinary development work.

@@ -89,6 +89,7 @@ import {
 import {
   UpdateService,
   launchWindowsUpdateHelper,
+  resolveAutomaticInstallationEnabled,
   resolveLocalUpdateDirectory,
   resolveUpdateChannel,
   resolveUpdaterStateDirectory,
@@ -192,6 +193,22 @@ async function waitForMaintenanceToFinish() {
     const timer = setTimeout(release, MAINTENANCE_WAIT_MS);
     maintenanceWaiters.add(release);
   });
+}
+
+/**
+ * Waits out maintenance, then refuses only if it is still running.
+ *
+ * `assertNoMaintenance` on its own is the right check at a point where nothing
+ * may be in flight, but it is the wrong one in the middle of an operation that
+ * has already awaited something: maintenance that started during that await
+ * turned an ordinary read into a visible refusal. Resetting the workspace
+ * reloads the window, and the reload's first read could land inside the tail of
+ * the reset it was triggered by — and be told to try again, for an operation
+ * that was about to finish on its own.
+ */
+async function awaitMaintenanceThenAssert() {
+  await waitForMaintenanceToFinish();
+  assertNoMaintenance();
 }
 
 async function runBusinessOperation<T>(operation: () => Promise<T> | T): Promise<T> {
@@ -748,7 +765,7 @@ if (hasSingleInstanceLock) app.whenReady().then(() => {
     provider: updateChannel.provider,
     publicKey: updateChannel.publicKey,
     stateDirectory: updaterStateDirectory,
-    automaticInstallationEnabled: app.isPackaged && process.platform === "win32" && !process.env.PORTABLE_EXECUTABLE_DIR,
+    automaticInstallationEnabled: resolveAutomaticInstallationEnabled({ isPackaged: app.isPackaged }),
     onStatus: (status) => mainWindow?.webContents.send("wheat:update:status", status),
   });
   if (updateChannel.misconfiguration) {
@@ -1044,9 +1061,9 @@ function registerIpc() {
   ipcMain.handle("wheat:bootstrap", async (_event, companyId?: string) => {
     let prisma: Awaited<ReturnType<typeof getPrisma>>;
     try {
-      assertNoMaintenance();
+      await awaitMaintenanceThenAssert();
       prisma = await getPrisma(app);
-      assertNoMaintenance();
+      await awaitMaintenanceThenAssert();
       startupDatabaseError = null;
     } catch (error) {
       startupDatabaseError = error instanceof Error ? error : new Error(String(error));
@@ -1064,17 +1081,28 @@ function registerIpc() {
     for (const company of companyIds) {
       await prisma.$transaction((tx) => seedPcgeForCompany(tx, company.id), { timeout: 60_000 });
     }
-    const companies = await prisma.company.findMany({
+    // The chart of accounts is only ever read for the dossier being worked on,
+    // and each dossier carries the full PCGE — better than a thousand rows.
+    // Shipping every dossier's chart made bootstrap cost grow with the size of
+    // the cabinet rather than the size of the work: a twenty-five dossier
+    // profile sent close to thirty thousand unused rows on every launch.
+    const companyShells = await prisma.company.findMany({
       include: {
         fiscalYears: true,
-        accounts: { orderBy: { code: "asc" } },
         journals: { orderBy: { code: "asc" } },
         _count: { select: { entries: true, invoices: true, documents: true, employees: true } },
       },
       orderBy: { name: "asc" },
     });
 
-    const activeCompanyId = companyId ?? companies[0]?.id;
+    const activeCompanyId = companyId ?? companyShells[0]?.id;
+    const activeAccounts = activeCompanyId
+      ? await prisma.account.findMany({ where: { companyId: activeCompanyId }, orderBy: { code: "asc" } })
+      : [];
+    const companies = companyShells.map((company) => ({
+      ...company,
+      accounts: company.id === activeCompanyId ? activeAccounts : [],
+    }));
 
     const [entries, invoices, documents, bankAccounts, taxPeriods, employees, activityLogs, ledgerEntryCount, dashboardMetrics] = await Promise.all([
       prisma.entry.findMany({
@@ -2048,11 +2076,21 @@ function registerIpc() {
   ipcMain.handle("wheat:bank:statement:prepare", async (_event, payload: Record<string, unknown>) => {
     const prisma = await getAuthorizedPrisma();
     const bankAccountId = requireId(payload?.bankAccountId, "Le compte bancaire");
+    // The dossier the accountant is working in, when the caller knows it. A
+    // statement is filed under the bank account's own dossier either way; this
+    // catches the case where the two disagree instead of quietly filing a
+    // statement into a dossier nobody is looking at.
+    const expectedCompanyId = payload?.companyId === undefined || payload?.companyId === null || payload?.companyId === ""
+      ? null
+      : requireId(payload.companyId, "La société");
     const sourceName = path.basename(requireText(payload?.sourceName, "Le nom du relevé", 250));
     const sourceSha256 = requireText(payload?.sourceSha256, "L'empreinte du relevé", 64).toLowerCase();
     if (!/^[a-f0-9]{64}$/.test(sourceSha256)) throw new Error("L'empreinte SHA-256 du relevé est invalide.");
     const bankAccount = await prisma.bankAccount.findUnique({ where: { id: bankAccountId } });
     if (!bankAccount) throw new Error("Le compte bancaire n'existe plus.");
+    if (expectedCompanyId && bankAccount.companyId !== expectedCompanyId) {
+      throw new Error("Ce compte bancaire appartient à un autre dossier. Changez de dossier avant d'importer ce relevé.");
+    }
     if (!bankAccount.active) throw new Error("Restaurez ce compte bancaire archivé avant d'importer un relevé.");
     const bytesBase64 = requireText(payload?.sourceBytesBase64, "Le contenu du relevé", 40_000_000);
     const bytes = Buffer.from(bytesBase64, "base64");

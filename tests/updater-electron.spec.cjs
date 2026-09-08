@@ -1,59 +1,16 @@
-const { test, expect, chromium } = require("@playwright/test");
-const { spawn, execFileSync } = require("node:child_process");
+const { test, expect } = require("@playwright/test");
 const fs = require("node:fs");
-const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
-
-const root = process.env.WHEAT_CWD ?? path.resolve(__dirname, "..");
-
-async function freePort() {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.on("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const port = server.address().port;
-      server.close(() => resolve(port));
-    });
-  });
-}
-
-async function waitForCdp(port, expected, timeout = 30000) {
-  const started = Date.now();
-  while (Date.now() - started < timeout) {
-    let available = false;
-    try { available = (await fetch(`http://127.0.0.1:${port}/json/version`)).ok; } catch {}
-    if (available === expected) return;
-    await new Promise((resolve) => setTimeout(resolve, 150));
-  }
-  throw new Error(`CDP endpoint did not become ${expected ? "available" : "unavailable"}.`);
-}
-
-async function connectPage(port) {
-  const browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
-  const context = browser.contexts()[0];
-  const page = context.pages()[0] ?? await context.waitForEvent("page");
-  await page.waitForLoadState("domcontentloaded");
-  await page.waitForFunction(() => Boolean(window.wheat), null, { timeout: 15000 });
-  return { browser, page };
-}
-
-async function runtimeTargetId(port) {
-  const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
-  return targets.find((target) => target.type === "page")?.id ?? null;
-}
-
-async function connectNewRuntime(port, previousTargetId, timeout = 45000) {
-  const started = Date.now();
-  while (Date.now() - started < timeout) {
-    try {
-      const targetId = await runtimeTargetId(port);
-      if (targetId && targetId !== previousTargetId) return connectPage(port);
-    } catch {}
-    await new Promise((resolve) => setTimeout(resolve, 200));
-  }
-  throw new Error("Electron did not expose a new renderer after restart.");
-}
+const {
+  connectNewRuntime,
+  connectPage,
+  freePort,
+  launchWheat,
+  runtimeTargetId,
+  stopWheat,
+  waitForCdp,
+} = require("./wheat-electron-harness.cjs");
 
 test("the installed-update modal appears once and Settings can manually check", async () => {
   test.setTimeout(120000);
@@ -81,14 +38,7 @@ test("the installed-update modal appears once and Settings can manually check", 
     },
   }));
 
-  const token = `atlas-updater-ui-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  const electronExe = path.join(root, "node_modules", "electron", "dist", "electron.exe");
-  const child = spawn(electronExe, [root, `--remote-debugging-port=${port}`, `--${token}`], {
-    cwd: root,
-    env: { ...process.env, WHEAT_USER_DATA_DIR: profile },
-    stdio: "ignore",
-    windowsHide: true,
-  });
+  const { child, token } = launchWheat({ port, profile, label: "atlas-updater-ui" });
   let browser;
   try {
     await waitForCdp(port, true);
@@ -121,18 +71,7 @@ test("the installed-update modal appears once and Settings can manually check", 
     await expect(page.locator(".app-shell")).toBeVisible({ timeout: 20000 });
     await expect(page.getByRole("dialog", { name: "Wheat a été mis à jour" })).toHaveCount(0);
   } finally {
-    try {
-      if (browser?.isConnected()) {
-        const page = browser.contexts()[0]?.pages()[0];
-        await page?.evaluate(() => window.wheat.windowControl("close")).catch(() => undefined);
-        await browser.close().catch(() => undefined);
-      }
-    } catch {}
-    try { child.kill(); } catch {}
-    try {
-      const cleanup = `$token='${token.replace(/'/g, "''")}'; Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like ('*--'+$token+'*') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`;
-      execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", cleanup], { windowsHide: true, timeout: 15000 });
-    } catch {}
+    await stopWheat({ browser, child, token });
     fs.rmSync(temporary, { recursive: true, force: true });
   }
 });
@@ -169,14 +108,7 @@ test("an available update is offered and waits, and Plus tard stops interrupting
     artifactSize: artifactBytes.length,
   }, null, 2));
 
-  const token = `wheat-updater-consent-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  const electronExe = path.join(root, "node_modules", "electron", "dist", "electron.exe");
-  const child = spawn(electronExe, [root, `--remote-debugging-port=${port}`, `--${token}`], {
-    cwd: root,
-    env: { ...process.env, WHEAT_USER_DATA_DIR: profile, WHEAT_UPDATES_DIR: updates },
-    stdio: "ignore",
-    windowsHide: true,
-  });
+  const { child, token } = launchWheat({ port, profile, env: { WHEAT_UPDATES_DIR: updates }, label: "wheat-updater-consent" });
   let browser;
   try {
     await waitForCdp(port, true);
@@ -209,18 +141,7 @@ test("an available update is offered and waits, and Plus tard stops interrupting
     expect(rechecked.postponed).toBe(true);
     await expect(page.getByRole("dialog", { name: "Une mise à jour de Wheat est disponible" })).toHaveCount(0);
   } finally {
-    try {
-      if (browser?.isConnected()) {
-        const page = browser.contexts()[0]?.pages()[0];
-        await page?.evaluate(() => window.wheat.windowControl("close")).catch(() => undefined);
-        await browser.close().catch(() => undefined);
-      }
-    } catch {}
-    try { child.kill(); } catch {}
-    try {
-      const cleanup = `$token='${token.replace(/'/g, "''")}'; Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like ('*--'+$token+'*') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`;
-      execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", cleanup], { windowsHide: true, timeout: 15000 });
-    } catch {}
+    await stopWheat({ browser, child, token });
     fs.rmSync(temporary, { recursive: true, force: true });
   }
 });

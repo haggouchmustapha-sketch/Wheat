@@ -1,7 +1,7 @@
 {
   "name": "wheat",
   "private": true,
-  "version": "2.1.2609081",
+  "version": "2.1.2609082",
   "description": "Wheat — free, local-first desktop accounting for Moroccan businesses.",
   "author": "Wheat",
   "license": "GPL-3.0-or-later",
@@ -24,7 +24,7 @@
     "release:publish": "node scripts/release-publish.mjs",
     "test:desktop": "npm run db:reset && npm run build && playwright test tests/electron-smoke.spec.cjs --reporter=line",
     "test:ocr": "npm run db:reset && npm run build && playwright test tests/ocr-meaningful.spec.cjs --reporter=line",
-    "test:updater": "playwright test tests/updater.spec.cjs tests/updater-https.spec.cjs tests/updater-github.spec.cjs tests/updater-signature.spec.cjs tests/updater-release-tooling.spec.cjs tests/updater-user-data.spec.cjs tests/updater-electron.spec.cjs --reporter=line",
+    "test:updater": "playwright test tests/updater.spec.cjs tests/updater-https.spec.cjs tests/updater-github.spec.cjs tests/updater-signature.spec.cjs tests/updater-release-tooling.spec.cjs tests/updater-user-data.spec.cjs tests/updater-electron.spec.cjs tests/updater-ui-flow.spec.cjs --reporter=line",
     "paddle:setup": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup-paddleocr.ps1",
     "paddle:check": "resources\\paddleocr\\runtime\\python.exe resources\\paddleocr\\worker.py --health",
     "prisma:generate": "prisma generate",

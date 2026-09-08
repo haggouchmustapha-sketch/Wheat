@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { assertCreditNoteTechnicalVoidBlocked14, createImmutablePostedInvoiceArtifact14 } from "./creditNotes14";
 import {
   ENTRY_STATUS,
+  assertPostingPeriodOpen,
   optionalText,
   parseAccountingDate,
   provisionalEntryNumber,
@@ -613,18 +614,6 @@ async function validateAccountIds(tx: any, companyId: string, accountIds: Array<
   return byId;
 }
 
-async function validateFiscalDate(tx: any, companyId: string, date: Date, label: string) {
-  const fiscalYear = await tx.fiscalYear.findFirst({
-    where: { companyId, startsOn: { lte: date }, endsOn: { gte: date } },
-  });
-  if (!fiscalYear) throw new Error(`${label} ne correspond à aucun exercice comptable.`);
-  if (fiscalYear.status !== "OPEN") throw new Error(`L'exercice « ${fiscalYear.label} » est clôturé.`);
-  if (fiscalYear.lockedTo && date <= fiscalYear.lockedTo) {
-    throw new Error(`La période est verrouillée jusqu'au ${fiscalYear.lockedTo.toISOString().slice(0, 10)} inclus.`);
-  }
-  return fiscalYear;
-}
-
 async function findFallbackAccount(tx: any, companyId: string, preferredId: string | null, code: string, label: string) {
   if (preferredId) {
     const map = await validateAccountIds(tx, companyId, [preferredId], label);
@@ -653,7 +642,7 @@ async function createAndPostEntry(tx: any, data: {
     counterpartyId?: string | null;
   }>;
 }) {
-  await validateFiscalDate(tx, data.companyId, data.date, "La date de comptabilisation");
+  await assertPostingPeriodOpen(tx, data.companyId, data.date, "La date de comptabilisation");
   const journal = await tx.journal.findUnique({ where: { companyId_code: { companyId: data.companyId, code: data.journalCode } } });
   if (!journal) throw new Error(`Le journal ${data.journalCode} n'est pas configuré pour cette société.`);
   if (!journal.active || journal.locked) throw new Error(`Le journal ${journal.code} est archivé ou verrouillé.`);
@@ -1243,7 +1232,7 @@ export function createSubledgerService(options: ServiceOptions) {
         if (invoice.version !== version) throw new Error("La facture a été modifiée dans une autre fenêtre.");
         if (!invoice.counterpartyModel || !invoice.counterpartyModel.active) throw new Error("Le tiers de la facture est absent ou archivé.");
         if (!invoice.lines.length) throw new Error("La facture ne contient aucune ligne.");
-        await validateFiscalDate(tx, companyId, invoice.invoiceDate, "La date de facture");
+        await assertPostingPeriodOpen(tx, companyId, invoice.invoiceDate, "La date de facture");
         await validateStoredInvoiceTaxConfiguration(tx, invoice);
         invoice = await allocateSaleInvoiceNumber(tx, invoice);
         const counterparty = invoice.counterpartyModel;
@@ -1576,7 +1565,7 @@ export function createSubledgerService(options: ServiceOptions) {
         if (payment.version !== version) throw new Error("Le paiement a été modifié dans une autre fenêtre.");
         if (!payment.counterparty.active) throw new Error("Le tiers du paiement est archivé.");
         if (!payment.controlAccount || !payment.settlementAccount) throw new Error("Les comptes du paiement ne sont pas configurés.");
-        await validateFiscalDate(tx, companyId, payment.paymentDate, "La date du paiement");
+        await assertPostingPeriodOpen(tx, companyId, payment.paymentDate, "La date du paiement");
         await validateAccountIds(tx, companyId, [payment.controlAccountId, payment.settlementAccountId], "Le paiement");
         await validateAllocationPlan(tx, {
           companyId,
@@ -1744,7 +1733,7 @@ export function createSubledgerService(options: ServiceOptions) {
         if (allocation.payment.lifecycleStatus !== SUBLEDGER_STATUS.posted) throw new Error("Le paiement de cette imputation n'est pas comptabilisé.");
         if (allocation.payment.version !== version) throw new Error("Le paiement a été modifié dans une autre fenêtre.");
         if (allocation.status !== "ACTIVE") throw new Error("Cette imputation est déjà annulée.");
-        await validateFiscalDate(tx, companyId, reversalDate, "La date d'annulation de l'imputation");
+        await assertPostingPeriodOpen(tx, companyId, reversalDate, "La date d'annulation de l'imputation");
         const claimedPayment = await tx.payment.updateMany({
           where: { id: allocation.paymentId, companyId, lifecycleStatus: SUBLEDGER_STATUS.posted, version },
           data: { version: { increment: 1 } },

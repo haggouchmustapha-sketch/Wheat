@@ -13,6 +13,10 @@ An installed Wheat reads that repository's Releases directly. The accountant
 never opens GitHub, never downloads an installer by hand, and never reinstalls a
 dossier.
 
+What that looks like from the accountant's side — every dialog between "a
+version was found" and "Wheat has been updated", including what Wheat cannot
+know about installer progress — is `docs/wheat-update-user-flow.md`.
+
 ---
 
 ## Where the repository is configured

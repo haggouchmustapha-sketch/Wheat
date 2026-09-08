@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { STORED_SCHEMA_VERSIONS } from "./legacyDomainValues";
-import { ENTRY_STATUS, rendererSerialize, requireId, requireText } from "./accounting";
+import { ENTRY_STATUS, assertPostingPeriodOpen, rendererSerialize, requireId, requireText } from "./accounting";
 import { appendActivityAndAudit } from "./audit13";
 import { allocatePieceNumber } from "./pieceNumbering21";
 import { PCGE_SOURCE } from "./pcgeData";
@@ -153,6 +153,13 @@ export async function previewOpeningBalance(tx: PrismaLike, payloadValue: unknow
   if (target.status !== "OPEN") throw new Error("Les à-nouveaux ne peuvent être créés que dans un exercice ouvert.");
   const source = await priorFiscalYear(tx, companyId, target, payload.sourceFiscalYearId ? requireId(payload.sourceFiscalYearId, "L'exercice source") : undefined);
   const calculated = await openingRows(tx, companyId, source, typeof payload.retainedEarningsAccountCode === "string" ? payload.retainedEarningsAccountCode.trim() : null);
+  // À-nouveaux carry the first day of the year, so a lock taken later in the
+  // year still covers them. Say so here rather than letting the accountant
+  // press a button that cannot succeed.
+  const locked = Boolean(target.lockedTo && target.startsOn <= target.lockedTo);
+  const warnings = locked
+    ? [...calculated.warnings, `La période est verrouillée jusqu'au ${target.lockedTo.toISOString().slice(0, 10)} inclus : les à-nouveaux du ${target.startsOn.toISOString().slice(0, 10)} ne peuvent pas être comptabilisés. Déverrouillez la période d'abord.`]
+    : calculated.warnings;
   return {
     companyId,
     fiscalYear: target,
@@ -160,7 +167,9 @@ export async function previewOpeningBalance(tx: PrismaLike, payloadValue: unknow
     sourceKind: "PREVIOUS_CLOSE",
     retainedEarningsAccountCode: payload.retainedEarningsAccountCode || null,
     ...calculated,
-    canPost: calculated.rows.length > 0 && calculated.differenceCents === 0n && calculated.warnings.length === 0,
+    warnings,
+    periodLocked: locked,
+    canPost: calculated.rows.length > 0 && calculated.differenceCents === 0n && warnings.length === 0,
     rule: "Seuls les comptes de bilan sont reportés. Les classes de charges/produits ne sont jamais reportées aveuglément.",
     source: PCGE_SOURCE,
   };
@@ -187,6 +196,7 @@ export async function postOpeningBalance(options: { prisma: PrismaLike; actorUse
     const journal = await tx.journal.findFirst({ where: { companyId: preview.companyId, code: "OD", active: true, locked: false } });
     if (!journal) throw new Error("Le journal OD actif est requis pour comptabiliser les à-nouveaux.");
     const date = preview.fiscalYear.startsOn;
+    await assertPostingPeriodOpen(tx, preview.companyId, date, "La date des à-nouveaux");
     const piece = await allocatePieceNumber(tx, { companyId: preview.companyId, journalId: journal.id, date, source: "OPENING_BALANCE_2_1" });
     const number = await allocateEntryNumber(tx, journal, preview.companyId, date);
     const run = await tx.openingBalanceRun.create({

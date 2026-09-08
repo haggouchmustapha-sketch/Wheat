@@ -70,7 +70,59 @@ function chunks<T>(rows: readonly T[], size: number) {
   return result;
 }
 
+/**
+ * Wires a dossier's own sub-accounts under the deepest standard account whose
+ * code prefixes them, inheriting that parent's reporting nature.
+ */
+async function linkCustomAccounts(prisma: PrismaLike, companyId: string, customAccounts: any[], standards: any[]) {
+  if (!customAccounts.length) return 0;
+  const standardByCode = new Map(standards.map((account: any) => [account.code, account]));
+  let linked = 0;
+  for (const custom of customAccounts) {
+    const parent = standards
+      .filter((candidate: any) => candidate.code.length < custom.code.length && custom.code.startsWith(candidate.code))
+      .sort((left: any, right: any) => right.code.length - left.code.length)[0] as any;
+    if (!parent || custom.parentCode === parent.code) continue;
+    const inherited = standardByCode.get(parent.code) as any;
+    await prisma.account.update({
+      where: { id: custom.id },
+      data: {
+        parentCode: parent.code,
+        hierarchyDepth: parent.hierarchyDepth + 1,
+        category: inherited.category,
+        reportNature: inherited.reportNature,
+        auxiliaryEligible: inherited.auxiliaryEligible,
+        expectedBalance: inherited.expectedBalance,
+        reportingMappingsJson: inherited.reportingMappingsJson,
+        searchText: normalizeAccountSearch(`${custom.code} ${custom.label}`),
+      },
+    });
+    linked += 1;
+  }
+  return linked;
+}
+
+const STANDARD_FIELDS = { code: true, hierarchyDepth: true, category: true, reportNature: true, auxiliaryEligible: true, expectedBalance: true, reportingMappingsJson: true } as const;
+const CUSTOM_FIELDS = { id: true, code: true, label: true, parentCode: true } as const;
+
 export async function seedPcgeForCompany(prisma: PrismaLike, companyId: string) {
+  // Every dossier is re-seeded on every launch, because that is how an existing
+  // dossier picks up a chart it predates. Reading three full account tables per
+  // dossier to discover there is nothing to do made startup cost grow with the
+  // size of the cabinet. Account codes are unique per dossier, so a complete
+  // count of standard accounts already proves that every PCGE code exists and
+  // is standard: nothing to create, nothing to promote. Only a sub-account that
+  // never got wired to a parent can still be outstanding, and asking for those
+  // by name costs one empty query in the settled case.
+  const standardCount = await prisma.account.count({ where: { companyId, isStandard: true } });
+  if (standardCount === PCGE_STANDARD_ACCOUNT_COUNT) {
+    const unlinked = await prisma.account.findMany({ where: { companyId, isStandard: false, parentCode: null }, select: CUSTOM_FIELDS });
+    const linkedCustom = unlinked.length
+      ? await linkCustomAccounts(prisma, companyId, unlinked, await prisma.account.findMany({ where: { companyId, isStandard: true }, select: STANDARD_FIELDS }))
+      : 0;
+    return { created: 0, promoted: 0, linkedCustom, total: PCGE_STANDARD_ACCOUNT_COUNT, classCounts: PCGE_CLASS_COUNTS };
+  }
+
   const existing = await prisma.account.findMany({
     where: { companyId },
     select: { id: true, code: true, label: true, isStandard: true },
@@ -102,37 +154,11 @@ export async function seedPcgeForCompany(prisma: PrismaLike, companyId: string) 
     promoted += 1;
   }
 
-  const standards = await prisma.account.findMany({
-    where: { companyId, isStandard: true },
-    select: { code: true, hierarchyDepth: true, category: true, reportNature: true, auxiliaryEligible: true, expectedBalance: true, reportingMappingsJson: true },
-  });
-  const standardByCode = new Map(standards.map((account: any) => [account.code, account]));
-  const customAccounts = await prisma.account.findMany({
-    where: { companyId, isStandard: false },
-    select: { id: true, code: true, label: true, parentCode: true },
-  });
-  let linkedCustom = 0;
-  for (const custom of customAccounts) {
-    const parent = standards
-      .filter((candidate: any) => candidate.code.length < custom.code.length && custom.code.startsWith(candidate.code))
-      .sort((left: any, right: any) => right.code.length - left.code.length)[0] as any;
-    if (!parent || custom.parentCode === parent.code) continue;
-    const inherited = standardByCode.get(parent.code) as any;
-    await prisma.account.update({
-      where: { id: custom.id },
-      data: {
-        parentCode: parent.code,
-        hierarchyDepth: parent.hierarchyDepth + 1,
-        category: inherited.category,
-        reportNature: inherited.reportNature,
-        auxiliaryEligible: inherited.auxiliaryEligible,
-        expectedBalance: inherited.expectedBalance,
-        reportingMappingsJson: inherited.reportingMappingsJson,
-        searchText: normalizeAccountSearch(`${custom.code} ${custom.label}`),
-      },
-    });
-    linkedCustom += 1;
-  }
+  const [standards, customAccounts] = await Promise.all([
+    prisma.account.findMany({ where: { companyId, isStandard: true }, select: STANDARD_FIELDS }),
+    prisma.account.findMany({ where: { companyId, isStandard: false }, select: CUSTOM_FIELDS }),
+  ]);
+  const linkedCustom = await linkCustomAccounts(prisma, companyId, customAccounts, standards);
 
   return { created: missing.length, promoted, linkedCustom, total: PCGE_STANDARD_ACCOUNT_COUNT, classCounts: PCGE_CLASS_COUNTS };
 }

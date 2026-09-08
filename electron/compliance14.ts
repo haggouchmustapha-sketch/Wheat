@@ -2028,6 +2028,64 @@ async function listFiscalCloseRuns(options: Compliance14Options, payloadValue: u
   return serialize(options, { items, count, truncated: count > items.length });
 }
 
+/**
+ * The rate structure a Moroccan dossier almost always starts from, offered as
+ * something to read and correct rather than something Wheat applies.
+ *
+ * A new dossier cannot post an invoice carrying VAT until a versioned, hashed
+ * configuration exists, and until now the accountant met that requirement as an
+ * empty form: invent the codes, retype the four rates, and find a citation.
+ * That is a blank page in front of the very first invoice.
+ *
+ * What this is NOT is a fiscal ruling. Nothing here is activated, nothing is
+ * written to the database, and no invoice can reference it. It is a filled-in
+ * form the accountant reads, corrects for the dossier's activity, and submits
+ * under their own judgement — the same save and the same explicit activation as
+ * a configuration typed from scratch. Rates change by finance law; that is
+ * precisely why the versioned configuration, not this proposal, is what the
+ * accounting is bound to.
+ */
+export const MOROCCAN_VAT_STARTER = {
+  name: "TVA sur encaissements",
+  accountingBasis: "COLLECTION" as const,
+  sourceReference: "Code Général des Impôts — TVA. Vérifiez les taux applicables à l'activité du dossier avant activation.",
+  collectedAccountCode: "445500",
+  deductibleAccountCode: "345520",
+  rates: [
+    { code: "TVA20", label: "Taux normal 20 %", rateBps: 2_000 },
+    { code: "TVA14", label: "Taux réduit 14 %", rateBps: 1_400 },
+    { code: "TVA10", label: "Taux réduit 10 %", rateBps: 1_000 },
+    { code: "TVA7", label: "Taux réduit 7 %", rateBps: 700 },
+  ],
+} as const;
+
+/**
+ * Turns the starter into a form the accountant can submit, bound to the
+ * dossier's own accounts. A dossier missing one of the two VAT accounts gets no
+ * proposal at all rather than a proposal pointing at nothing.
+ */
+async function starterTaxProposal(prisma: PrismaLike, companyId: string, hasConfiguration: boolean) {
+  if (hasConfiguration) return null;
+  const [collected, deductible] = await Promise.all([
+    prisma.account.findFirst({ where: { companyId, code: MOROCCAN_VAT_STARTER.collectedAccountCode, active: true }, select: { id: true, code: true, label: true } }),
+    prisma.account.findFirst({ where: { companyId, code: MOROCCAN_VAT_STARTER.deductibleAccountCode, active: true }, select: { id: true, code: true, label: true } }),
+  ]);
+  if (!collected || !deductible) return null;
+  return {
+    name: MOROCCAN_VAT_STARTER.name,
+    accountingBasis: MOROCCAN_VAT_STARTER.accountingBasis,
+    sourceReference: MOROCCAN_VAT_STARTER.sourceReference,
+    // Collected and deductible are separate rules because they post to
+    // different accounts and a purchase must never reach a sales VAT account.
+    rates: MOROCCAN_VAT_STARTER.rates.flatMap((rate, index) => [
+      { code: `${rate.code}C`, label: `${rate.label} — collectée`, rateBps: rate.rateBps, direction: "COLLECTED", deductibilityBps: 0, accountId: collected.id, position: index * 2 + 1 },
+      { code: `${rate.code}D`, label: `${rate.label} — déductible`, rateBps: rate.rateBps, direction: "DEDUCTIBLE", deductibilityBps: 10_000, accountId: deductible.id, position: index * 2 + 2 },
+    ]),
+    accounts: { collected, deductible },
+    notice: "Proposition à vérifier : Wheat ne l'a ni enregistrée ni activée. Corrigez les taux selon l'activité du dossier, puis enregistrez et activez la version.",
+  };
+}
+
 async function taxWorkspace(options: Compliance14Options, payloadValue: unknown) {
   const payload = record(payloadValue);
   const companyId = requireId(payload.companyId, "La soci\u00e9t\u00e9");
@@ -2121,9 +2179,11 @@ async function taxWorkspace(options: Compliance14Options, payloadValue: unknown)
     }),
   ]);
   const meta = (count: number, items: unknown[]) => ({ count, returned: items.length, truncated: count > items.length });
+  const starterProposal = await starterTaxProposal(prisma, companyId, configurationCount > 0);
   return serialize(options, {
     company: { id: company.id, name: company.name, vatFrequency: company.vatFrequency, baseCurrency: company.baseCurrency },
     configurations,
+    starterProposal,
     workpapers,
     fiscalYears,
     closeRuns,

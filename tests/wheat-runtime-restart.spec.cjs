@@ -1,78 +1,23 @@
-const { test, expect, chromium } = require("@playwright/test");
+const { test, expect } = require("@playwright/test");
 const { openDossierForWork } = require("./wheat-ui-helpers.cjs");
-const { spawn, execFileSync } = require("node:child_process");
 const fs = require("node:fs");
-const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
-
-const root = process.env.WHEAT_CWD ?? path.resolve(__dirname, "..");
-
-async function freePort() {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.on("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const port = server.address().port;
-      server.close(() => resolve(port));
-    });
-  });
-}
-
-async function waitForCdp(port, expected, timeout = 30000) {
-  const started = Date.now();
-  while (Date.now() - started < timeout) {
-    let available = false;
-    try {
-      const response = await fetch(`http://127.0.0.1:${port}/json/version`);
-      available = response.ok;
-    } catch {}
-    if (available === expected) return;
-    await new Promise((resolve) => setTimeout(resolve, 150));
-  }
-  throw new Error(`CDP endpoint did not become ${expected ? "available" : "unavailable"}.`);
-}
-
-async function connectPage(port) {
-  const browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
-  const context = browser.contexts()[0];
-  const page = context.pages()[0] ?? await context.waitForEvent("page");
-  await page.waitForLoadState("domcontentloaded");
-  await page.waitForFunction(() => Boolean(window.wheat), null, { timeout: 15000 });
-  return { browser, page };
-}
-
-async function runtimeTargetId(port) {
-  const response = await fetch(`http://127.0.0.1:${port}/json/list`);
-  if (!response.ok) throw new Error(`CDP target list returned ${response.status}.`);
-  const targets = await response.json();
-  return targets.find((target) => target.type === "page")?.id ?? null;
-}
-
-async function connectNewRuntime(port, previousTargetId, timeout = 45000) {
-  const started = Date.now();
-  while (Date.now() - started < timeout) {
-    try {
-      const targetId = await runtimeTargetId(port);
-      if (targetId && targetId !== previousTargetId) return connectPage(port);
-    } catch {}
-    await new Promise((resolve) => setTimeout(resolve, 200));
-  }
-  throw new Error("Electron did not expose a new renderer runtime after relaunch.");
-}
+const {
+  connectNewRuntime,
+  connectPage,
+  freePort,
+  launchWheat,
+  runtimeTargetId,
+  stopWheat,
+  waitForCdp,
+} = require("./wheat-electron-harness.cjs");
 
 test("a real Electron relaunch clears stale modal focus and restores keyboard input", async () => {
   test.setTimeout(120000);
   const port = await freePort();
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "atlas-21-real-restart-"));
-  const token = `atlas-restart-test-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  const electronExe = path.join(root, "node_modules", "electron", "dist", "electron.exe");
-  const child = spawn(electronExe, [root, `--remote-debugging-port=${port}`, `--${token}`], {
-    cwd: root,
-    env: { ...process.env, WHEAT_USER_DATA_DIR: path.join(temporary, "profile") },
-    stdio: "ignore",
-    windowsHide: true,
-  });
+  const { child, token } = launchWheat({ port, profile: path.join(temporary, "profile"), label: "atlas-restart-test" });
   let browser;
   try {
     await waitForCdp(port, true, 30000);
@@ -126,19 +71,7 @@ test("a real Electron relaunch clears stale modal focus and restores keyboard in
     await expect(labelAfter).toHaveValue("Saisie après redémarrage");
     await page.getByRole("button", { name: "Annuler" }).click();
   } finally {
-    try {
-      if (browser?.isConnected()) {
-        const context = browser.contexts()[0];
-        const page = context?.pages()[0];
-        await page?.evaluate(() => window.wheat.windowControl("close")).catch(() => undefined);
-        await browser.close().catch(() => undefined);
-      }
-    } catch {}
-    try { child.kill(); } catch {}
-    try {
-      const cleanup = `$token='${token.replace(/'/g, "''")}'; Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like ('*--'+$token+'*') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`;
-      execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", cleanup], { windowsHide: true, timeout: 15000 });
-    } catch {}
+    await stopWheat({ browser, child, token });
     fs.rmSync(temporary, { recursive: true, force: true });
   }
 });

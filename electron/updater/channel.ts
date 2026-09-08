@@ -123,3 +123,31 @@ export function resolveUpdateChannel(options: {
     };
   }
 }
+
+/**
+ * Whether this build may replace its own program files.
+ *
+ * True only for an installed Windows Wheat: a portable copy lives wherever the
+ * user put it and is theirs to replace, and an unpackaged build has no program
+ * files to replace at all. Everywhere else an update is still found, downloaded
+ * and verified — it is simply never applied, and the UI says so.
+ *
+ * The development override exists so the install path can be driven in a real
+ * window by the updater tests, and follows the same rule as the update source
+ * and the signing key: honoured only in an unpackaged build, so no variable in
+ * a user's shell can change what an installed Wheat does. It grants no new
+ * powers — the helper, its signature and checksum guards and the staged
+ * artifact are unchanged, and a development build has no packaged helper to
+ * run, so the attempt fails at the readiness gate rather than touching
+ * anything.
+ */
+export function resolveAutomaticInstallationEnabled(options: {
+  isPackaged: boolean;
+  platform?: NodeJS.Platform;
+  env?: NodeJS.ProcessEnv;
+}) {
+  const env = options.env ?? process.env;
+  if ((options.platform ?? process.platform) !== "win32") return false;
+  if (!options.isPackaged) return readWheatEnv("WHEAT_UPDATE_ALLOW_INSTALL", env)?.trim() === "1";
+  return !env.PORTABLE_EXECUTABLE_DIR;
+}

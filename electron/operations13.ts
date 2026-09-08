@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import {
   ENTRY_STATUS,
+  assertPostingPeriodOpen,
   madToCents,
   optionalText,
   parseAccountingDate,
@@ -183,18 +184,6 @@ async function assertCompany(prisma: PrismaLike, companyId: string) {
   return company;
 }
 
-async function assertAccountingDateAllowed(tx: PrismaLike, companyId: string, date: Date) {
-  const fiscalYear = await tx.fiscalYear.findFirst({
-    where: { companyId, startsOn: { lte: date }, endsOn: { gte: date } },
-    orderBy: { startsOn: "desc" },
-  });
-  if (!fiscalYear) throw new Error(`Aucun exercice ne couvre la date ${isoDay(date)}.`);
-  if (fiscalYear.status !== "OPEN") throw new Error(`L'exercice ${fiscalYear.label} n'est pas ouvert.`);
-  if (fiscalYear.lockedTo && date <= fiscalYear.lockedTo) {
-    throw new Error(`La période est verrouillée jusqu'au ${isoDay(fiscalYear.lockedTo)}.`);
-  }
-  return fiscalYear;
-}
 
 async function allocatePostedNumber(tx: PrismaLike, journalId: string, companyId: string, date: Date) {
   for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -630,7 +619,7 @@ async function updateDraftEntry(options: Operations13Options, payloadValue: unkn
     if (!entry) throw new Error("L'écriture n'existe plus.");
     if (entry.status !== ENTRY_STATUS.draft) throw new Error("Seule une écriture brouillon peut être modifiée.");
     if (entry.version !== expectedVersion) throw new Error("Cette écriture a été modifiée ailleurs. Actualisez l'écran.");
-    await assertAccountingDateAllowed(tx, companyId, date);
+    await assertPostingPeriodOpen(tx, companyId, date);
     const journal = await tx.journal.findFirst({ where: { id: journalId, companyId, active: true } });
     if (!journal || journal.locked) throw new Error("Le journal est archivé, verrouillé ou appartient à une autre société.");
     const accountIds = [...new Set(parsedLines.map((line) => line.accountId))];
@@ -727,7 +716,7 @@ async function voidPayrollRun(options: Operations13Options, payloadValue: unknow
     if (payroll.version !== expectedVersion) throw new Error("Cette paie a été modifiée ailleurs. Actualisez l'écran.");
     if (payroll.status !== "POSTED" || !payroll.postedEntry) throw new Error("Seule une paie comptabilisée peut être annulée.");
     if (payroll.voidEntryId) throw new Error("Cette paie possède déjà une écriture d'annulation.");
-    await assertAccountingDateAllowed(tx, companyId, date);
+    await assertPostingPeriodOpen(tx, companyId, date);
     const activeAllocation = await tx.bankReconciliationAllocation.findFirst({
       where: { entryLine: { entryId: payroll.postedEntry.id }, reconciliation: { status: "ACTIVE" } },
       select: { id: true },
@@ -1139,7 +1128,7 @@ async function confirmLedgerImport(options: Operations13Options, payloadValue: u
       const creditCents = rows.reduce((sum: bigint, row: ParsedImportRow) => sum + BigInt(row.normalized.creditCents), 0n);
       if (debitCents !== creditCents) throw new Error(`L'écriture ${entryKey} est déséquilibrée de ${(debitCents - creditCents).toString()} centime(s).`);
       const date = parseIsoDay(first.date, `La date de ${entryKey}`);
-      await assertAccountingDateAllowed(tx, companyId, date);
+      await assertPostingPeriodOpen(tx, companyId, date);
       const journal = journalByCode.get(first.journalCode);
       if (!journal || journal.locked) throw new Error(`Le journal ${first.journalCode} est verrouillé.`);
       const piece = await allocatePieceNumber(tx, {

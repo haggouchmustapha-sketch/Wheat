@@ -170,6 +170,7 @@ export function ComplianceWorkspace14({
   const [effectiveTo, setEffectiveTo] = useState("");
   const [sourceReference, setSourceReference] = useState("");
   const [rates, setRates] = useState<RateDraft[]>([blankRate()]);
+  const [proposalApplied, setProposalApplied] = useState(false);
   const [periodStart, setPeriodStart] = useState(currentYearStart);
   const [periodEnd, setPeriodEnd] = useState(currentYearEnd);
   const [selectedConfigId, setSelectedConfigId] = useState("");
@@ -211,12 +212,36 @@ export function ComplianceWorkspace14({
   }, [loadWorkspace]);
 
   const configurations = useMemo(() => workspaceRows(workspace, "configurations", "taxConfigurations"), [workspace]);
+  const starterProposal = (workspace?.starterProposal ?? null) as LooseRecord | null;
   const workpapers = useMemo(() => workspaceRows(workspace, "workpapers", "vatWorkpapers"), [workspace]);
   const fiscalYears = useMemo(() => workspaceRows(workspace, "fiscalYears"), [workspace]);
   const closeRuns = useMemo(() => workspaceRows(workspace, "closeRuns", "fiscalCloseRuns"), [workspace]);
   const seals = useMemo(() => workspaceRows(workspace, "seals", "auditSeals"), [workspace]);
   const creditNotes = useMemo(() => workspaceRows(workspace, "creditNotes"), [workspace]);
   const hashedDocuments = useMemo(() => documents.filter((document) => document.contentSha256), [documents]);
+
+  /**
+   * Fills the form from the dossier's starter proposal. It stops at the form on
+   * purpose: the accountant reads every rate, corrects what the activity
+   * requires, and saves and activates under their own name, exactly as for a
+   * configuration typed from nothing.
+   */
+  const applyStarterProposal = useCallback(() => {
+    if (!starterProposal) return;
+    setConfigName(String(starterProposal.name ?? "TVA sur encaissements"));
+    setSourceReference(String(starterProposal.sourceReference ?? ""));
+    setRates((Array.isArray(starterProposal.rates) ? starterProposal.rates : []).map((rate: LooseRecord): RateDraft => ({
+      key: key(),
+      code: String(rate.code ?? ""),
+      label: String(rate.label ?? ""),
+      rate: (Number(rate.rateBps ?? 0) / 100).toString(),
+      direction: (rate.direction === "COLLECTED" || rate.direction === "DEDUCTIBLE" ? rate.direction : "BOTH"),
+      deductibility: (Number(rate.deductibilityBps ?? 10_000) / 100).toString(),
+      accountId: String(rate.accountId ?? ""),
+    })));
+    setProposalApplied(true);
+    notify("Proposition chargée dans le formulaire. Vérifiez chaque taux, puis enregistrez et activez.", "info");
+  }, [starterProposal, notify]);
 
   const run = useCallback(async (label: string, action: () => Promise<unknown>, success: string) => {
     setBusy(label);
@@ -447,7 +472,16 @@ export function ComplianceWorkspace14({
                     <button className="compliance14-link" disabled={!!busy} onClick={() => run(`config:clone:${configuration.id}`, () => callBridge("cloneTaxConfiguration", { companyId, id: configuration.id }), "Nouvelle révision créée comme brouillon.")}>Dupliquer</button>
                   </article>
                 ))}
-                {!configurations.length && <EmptyState title="Aucune configuration" note="Créez une version et vérifiez chaque taux avant activation." />}
+                {!configurations.length && <EmptyState title="Aucune configuration" note="Aucune facture portant de la TVA ne peut être comptabilisée tant qu'une version n'est pas active." />}
+                {!configurations.length && starterProposal && (
+                  <div className="compliance14-message is-info">
+                    <AlertTriangle size={17} />
+                    <span>{String(starterProposal.notice ?? "")}</span>
+                    <button type="button" disabled={proposalApplied} onClick={applyStarterProposal}>
+                      {proposalApplied ? "Chargée" : "Pré-remplir le formulaire"}
+                    </button>
+                  </div>
+                )}
               </div>
             </section>
 

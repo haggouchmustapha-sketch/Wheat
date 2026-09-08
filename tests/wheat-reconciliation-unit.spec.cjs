@@ -509,3 +509,51 @@ test("registers a stable IPC surface and serializes service results", async () =
   expect(result.serialized.movements[0].amountCents).toBe("-10000");
   expect(typeof facade.confirm).toBe("function");
 });
+
+test("the reconciliation window is bounded, and never at the expense of outstanding work", async () => {
+  const fixture = await createAccountingFixture();
+  const service = reconciliation.createReconciliationService(prisma);
+
+  // The fixture movement is old and still unreconciled: exactly the item a
+  // date-ordered cap would push out of sight first.
+  const oldest = fixture.movement;
+  for (let index = 0; index < 12; index += 1) {
+    const line = await addBankEntry(fixture, {
+      suffix: `window-${index}`,
+      date: `2026-09-${String(index + 1).padStart(2, "0")}T00:00:00.000Z`,
+      pieceNumber: `WIN-${index}`,
+      label: `Mouvement récent ${index}`,
+      creditCents: 5_000n,
+    });
+    const movement = await prisma.bankMovement.create({
+      data: {
+        id: `${fixture.company.id}-recent-${index}`,
+        bankAccountId: fixture.bankAccount.id,
+        date: new Date(`2026-09-${String(index + 1).padStart(2, "0")}T00:00:00.000Z`),
+        label: `Mouvement récent ${index}`,
+        amountCents: -5_000n,
+        reference: `WIN-${index}`,
+        status: "TO_REVIEW",
+        confidence: 0,
+      },
+    });
+    // Every recent movement is fully reconciled, so only the oldest one still
+    // carries work.
+    await service.confirm({
+      movementId: movement.id,
+      expectedRevision: 0,
+      allocations: [{ entryLineId: line.id, amountCents: "5000" }],
+    });
+  }
+
+  const workspace = await service.workspace({ companyId: fixture.company.id, bankAccountId: fixture.bankAccount.id });
+  expect(workspace.movementCount).toBe(13);
+  expect(workspace.returnedCount).toBe(13);
+  expect(workspace.truncated).toBe(false);
+  // Nothing settled displaced the one item with work left on it.
+  expect(workspace.movements.map((movement) => movement.id)).toContain(oldest.id);
+  // The window still reads newest first, whatever order it was assembled in.
+  const dates = workspace.movements.map((movement) => new Date(movement.date).getTime());
+  expect([...dates].sort((left, right) => right - left)).toEqual(dates);
+  expect(workspace.movements.find((movement) => movement.id === oldest.id).reconciliation.status).toBe("UNRECONCILED");
+});

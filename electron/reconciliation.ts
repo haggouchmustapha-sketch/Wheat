@@ -8,6 +8,9 @@ const MAX_I64 = (2n ** 63n) - 1n;
 const MIN_I64 = -(2n ** 63n);
 const MAX_CONFIRM_ITEMS = 100;
 const MAX_IMPORT_ROWS = 2_000;
+// One screen of reconciliation work. Large enough that a normal dossier is
+// never truncated, small enough that a long history cannot stall the page.
+const MAX_WORKSPACE_MOVEMENTS = 2_000;
 const ACTIVE_RECONCILIATION = "ACTIVE";
 
 export const RECONCILIATION_IPC_CHANNELS = {
@@ -755,16 +758,57 @@ export function createReconciliationService(prisma: DbLike, options: Reconciliat
       orderBy: { bankName: "asc" },
     });
     if (bankAccountId && !accounts.length) throw new Error("Bank account does not belong to the selected company.");
-    const movements = await prisma.bankMovement.findMany({
-      where: {
-        bankAccount: { companyId },
-        ...(bankAccountId ? { bankAccountId } : {}),
-        ...(input.includeExcluded ? {} : { excludedAt: null }),
-      },
+    /*
+     * A bounded work list, biased towards work that is still outstanding.
+     *
+     * This read used to return every movement the dossier had ever imported,
+     * each carrying its bank account, its statement and every reconciliation
+     * with the full accounting line, entry and account behind it. A dossier
+     * with three years of statements loads tens of thousands of rows to show a
+     * screen about the last few.
+     *
+     * A plain cap on a date-ordered list would have been the wrong bound: it
+     * hides the oldest rows, and an unmatched movement from last year is
+     * exactly the thing an accountant must not lose sight of. So movements with
+     * no active reconciliation — the ones with work left on them — are taken
+     * first, and whatever room is left is filled with the most recent of the
+     * rest. What a cap can drop is settled history, never an open item.
+     */
+    const movementWhere = {
+      bankAccount: { companyId },
+      ...(bankAccountId ? { bankAccountId } : {}),
+      ...(input.includeExcluded ? {} : { excludedAt: null }),
+    };
+    const [movementCount, pending] = await Promise.all([
+      prisma.bankMovement.count({ where: movementWhere }),
+      prisma.bankMovement.findMany({
+        where: { ...movementWhere, reconciliations: { none: { status: ACTIVE_RECONCILIATION } } },
+        include: movementInclude(),
+        orderBy: [{ date: "desc" }, { createdAt: "desc" }],
+        take: MAX_WORKSPACE_MOVEMENTS,
+      }),
+    ]);
+    const settled = pending.length >= MAX_WORKSPACE_MOVEMENTS ? [] : await prisma.bankMovement.findMany({
+      where: { ...movementWhere, reconciliations: { some: { status: ACTIVE_RECONCILIATION } } },
       include: movementInclude(),
       orderBy: [{ date: "desc" }, { createdAt: "desc" }],
+      take: MAX_WORKSPACE_MOVEMENTS - pending.length,
     });
-    return { companyId, accounts: transport(accounts), movements: movements.map(movementView), generatedAt: now().toISOString() };
+    const movements = [...pending, ...settled].sort((left: any, right: any) => {
+      const byDate = new Date(right.date).getTime() - new Date(left.date).getTime();
+      return byDate !== 0 ? byDate : new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime();
+    });
+    return {
+      companyId,
+      accounts: transport(accounts),
+      movements: movements.map(movementView),
+      movementCount,
+      returnedCount: movements.length,
+      truncated: movementCount > movements.length,
+      movementLimit: MAX_WORKSPACE_MOVEMENTS,
+      pendingFirst: true,
+      generatedAt: now().toISOString(),
+    };
   }
 
   async function candidates(input: { movementId: string }) {

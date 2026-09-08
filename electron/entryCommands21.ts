@@ -1,5 +1,6 @@
 import {
   ENTRY_STATUS,
+  assertPostingPeriodOpen,
   formatCentsAsMad,
   madToCents,
   optionalText,
@@ -151,10 +152,7 @@ export async function validateDraftEntryForPosting(tx: any, entryId: string, com
     const difference = debitCents > creditCents ? debitCents - creditCents : creditCents - debitCents;
     throw new Error(`L'écriture est déséquilibrée de ${formatCentsAsMad(difference)} MAD.`);
   }
-  const fiscalYear = await tx.fiscalYear.findFirst({ where: { companyId: entry.companyId, startsOn: { lte: entry.date }, endsOn: { gte: entry.date } } });
-  if (!fiscalYear) throw new Error("La date de l'écriture ne correspond à aucun exercice comptable.");
-  if (fiscalYear.status !== "OPEN") throw new Error(`L'exercice « ${fiscalYear.label} » est clôturé.`);
-  if (fiscalYear.lockedTo && entry.date <= fiscalYear.lockedTo) throw new Error(`La période est verrouillée jusqu'au ${fiscalYear.lockedTo.toISOString().slice(0, 10)} inclus.`);
+  await assertPostingPeriodOpen(tx, entry.companyId, entry.date, "La date de l'écriture");
   return entry;
 }
 
@@ -217,9 +215,7 @@ export function createEntryCommandService(options: EntryCommandOptions) {
       if (normalized.status !== ENTRY_STATUS.draft) throw new Error("La prévisualisation Wheat AI prépare uniquement un brouillon; la comptabilisation est une action séparée.");
       const prisma = await options.getPrisma();
       const references = await validateEntryCommandReferences(prisma, normalized);
-      const fiscalYear = await prisma.fiscalYear.findFirst({ where: { companyId: normalized.companyId, startsOn: { lte: normalized.date }, endsOn: { gte: normalized.date } } });
-      if (!fiscalYear || fiscalYear.status !== "OPEN") throw new Error("La date du brouillon doit appartenir à un exercice ouvert.");
-      if (fiscalYear.lockedTo && normalized.date <= fiscalYear.lockedTo) throw new Error(`La période est verrouillée jusqu'au ${fiscalYear.lockedTo.toISOString().slice(0, 10)} inclus.`);
+      await assertPostingPeriodOpen(prisma, normalized.companyId, normalized.date, "La date du brouillon");
       const debitCents = normalized.lines.reduce((sum, line) => sum + line.debitCents, 0n);
       const creditCents = normalized.lines.reduce((sum, line) => sum + line.creditCents, 0n);
       if (debitCents !== creditCents) throw new Error(`Le brouillon proposé est déséquilibré de ${formatCentsAsMad(debitCents > creditCents ? debitCents - creditCents : creditCents - debitCents)} MAD.`);

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
 import type { AcquiredUpdate, UpdateDownloadProgress, UpdateProvider, UpdateRelease } from "./types";
+import { MAX_ARTIFACT_BYTES, downloadArtifact } from "./releaseTransport";
 import { validateReleaseManifest, verifyStagedArtifact } from "./validation";
 
 const MAX_MANIFEST_BYTES = 1024 * 1024;
@@ -67,21 +67,19 @@ export class LocalUpdateProvider implements UpdateProvider {
     ]);
     if (!realArtifact.startsWith(`${realRoot}${path.sep}`)) throw new Error("Update artifact resolves outside the configured local update directory.");
     if (release.artifactSize && sourceStat.size !== release.artifactSize) throw new Error("Update artifact size does not match its metadata.");
-    await fs.promises.mkdir(stagingDirectory, { recursive: true });
-    const finalPath = path.join(stagingDirectory, path.basename(sourcePath));
-    const temporaryPath = `${finalPath}.${randomUUID()}.part`;
-    try {
-      onProgress?.({ transferredBytes: 0, totalBytes: sourceStat.size, percent: 0 });
-      await fs.promises.copyFile(sourcePath, temporaryPath, fs.constants.COPYFILE_EXCL);
-      await fs.promises.rename(temporaryPath, finalPath);
-      // A local copy is not a transfer worth animating; it is reported as one
-      // step so the dialog shows a real size rather than an invented gauge.
-      onProgress?.({ transferredBytes: sourceStat.size, totalBytes: sourceStat.size, percent: 100 });
-    } catch (error) {
-      await fs.promises.rm(temporaryPath, { force: true }).catch(() => undefined);
-      throw error;
-    }
-    return { release, artifactPath: finalPath };
+    // Staged through the same writer the network channels use: one owner for
+    // the `.part` file, the rename on success and the byte-budgeted progress
+    // reports. A local installer is a hundred megabytes or so, and reading it
+    // as a stream is what lets the dialog show the bytes as they land instead
+    // of standing at zero for the whole copy and then jumping to done.
+    const artifactPath = await downloadArtifact({ body: fs.createReadStream(sourcePath) }, {
+      stagingDirectory,
+      fileName: path.basename(sourcePath),
+      maxArtifactBytes: MAX_ARTIFACT_BYTES,
+      expectedSize: sourceStat.size,
+      onProgress,
+    });
+    return { release, artifactPath };
   }
 
   async validateUpdate(update: AcquiredUpdate) {

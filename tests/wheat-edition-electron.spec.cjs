@@ -2,7 +2,7 @@ const { test, expect } = require("@playwright/test");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { root, freePort, waitForCdp, connectPage, launchWheat, stopWheat } = require("./wheat-electron-harness.cjs");
+const { root, builtEdition, freePort, waitForCdp, connectPage, launchWheat, stopWheat } = require("./wheat-electron-harness.cjs");
 
 /**
  * The edition, in a real running Wheat.
@@ -19,16 +19,6 @@ const { root, freePort, waitForCdp, connectPage, launchWheat, stopWheat } = requ
  *   npm run build:standard     && npx playwright test tests/wheat-edition-electron.spec.cjs
  *   npm run build:lightweight  && npx playwright test tests/wheat-edition-electron.spec.cjs
  */
-
-function builtEdition() {
-  const stamp = path.join(root, "dist-electron", "wheat-edition.json");
-  if (!fs.existsSync(stamp)) return null;
-  try {
-    return JSON.parse(fs.readFileSync(stamp, "utf8")).edition ?? null;
-  } catch {
-    return null;
-  }
-}
 
 test("the built edition reaches the main process, the renderer and the document", async () => {
   test.setTimeout(150_000);

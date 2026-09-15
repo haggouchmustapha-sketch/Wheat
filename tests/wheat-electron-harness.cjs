@@ -20,6 +20,7 @@
 
 const { chromium } = require("@playwright/test");
 const { spawn, execFileSync } = require("node:child_process");
+const fs = require("node:fs");
 const net = require("node:net");
 const path = require("node:path");
 
@@ -108,4 +109,24 @@ async function stopWheat({ browser, child, token }) {
   } catch {}
 }
 
-module.exports = { root, freePort, waitForCdp, connectPage, runtimeTargetId, connectNewRuntime, launchWheat, stopWheat };
+
+/**
+ * The edition compiled into the build these specs drive, read from the stamp
+ * the build writes beside the bundle.
+ *
+ * Electron specs run against whatever `dist-electron/` currently holds, and a
+ * spec whose meaning depends on that must say so rather than fail obscurely:
+ * building one edition and then running a suite written for the other produced
+ * a red result that looked like a product fault and was not.
+ */
+function builtEdition() {
+  const stamp = path.join(root, "dist-electron", "wheat-edition.json");
+  if (!fs.existsSync(stamp)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(stamp, "utf8")).edition ?? null;
+  } catch {
+    return null;
+  }
+}
+
+module.exports = { root, builtEdition, freePort, waitForCdp, connectPage, runtimeTargetId, connectNewRuntime, launchWheat, stopWheat };

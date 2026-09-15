@@ -38,6 +38,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const {
+  builtEdition,
   connectNewRuntime,
   connectPage,
   freePort,
@@ -129,6 +130,14 @@ const dialogFrames = (page) => page.evaluate(() => window.__wheatDialogFrames ??
 const statuses = (page) => page.evaluate(() => window.__wheatStatuses ?? []);
 
 test("the download shows real moving figures, becomes installable, and a helper that cannot start leaves Wheat open", async () => {
+  // `publishLocalRelease` writes a manifest with no editions map — the shape
+  // every Wheat released before editions existed reads. Standard installs it;
+  // any other edition refuses rather than install Standard over itself, which
+  // is the intended behaviour and not something to assert against here.
+  test.skip(
+    (builtEdition() ?? "standard") !== "standard",
+    "covers a pre-edition manifest, which only Standard accepts — build Standard to run it",
+  );
   test.setTimeout(180000);
   const port = await freePort();
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "wheat-updater-ui-flow-"));

@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const {
+  builtEdition,
   connectNewRuntime,
   connectPage,
   freePort,
@@ -85,6 +86,14 @@ test("the installed-update modal appears once and Settings can manually check", 
  * keeps the update available without interrupting again.
  */
 test("an available update is offered and waits, and Plus tard stops interrupting", async () => {
+  // The manifest below deliberately predates editions: it is how every Wheat
+  // released before they existed describes itself, and those installs must keep
+  // updating. Standard accepts it; any other edition refuses it on purpose
+  // rather than install Standard over itself, so this case is Standard's.
+  test.skip(
+    (builtEdition() ?? "standard") !== "standard",
+    "covers a pre-edition manifest, which only Standard accepts — build Standard to run it",
+  );
   test.setTimeout(120000);
   const port = await freePort();
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "wheat-updater-consent-"));

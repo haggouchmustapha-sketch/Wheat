@@ -77,6 +77,32 @@ function runNpmScript(script) {
   execSync(`npm run ${script}`, { cwd: root, stdio: "inherit", windowsHide: true });
 }
 
+/**
+ * Carries a version bump into package-lock.json's two root fields.
+ *
+ * npm writes the version in both files and `tests/wheat-migration-compliance`
+ * asserts they agree, so rewriting only package.json leaves the tree failing a
+ * check this script does not run — discovered exactly that way, after a release
+ * had been built. The dependency tree below the root is untouched: this is a
+ * version bump, not a reinstall.
+ */
+function rewriteLockfileVersion(requested) {
+  const lockPath = path.join(root, "package-lock.json");
+  if (!fs.existsSync(lockPath)) return;
+  const lines = fs.readFileSync(lockPath, "utf8").split(/\r?\n/);
+  let rewritten = 0;
+  // Only the header and the "" root package entry carry the product version;
+  // both sit at the very top, before any dependency does.
+  for (let index = 0; index < Math.min(lines.length, 12); index += 1) {
+    if (!/^\s*"version":/.test(lines[index])) continue;
+    lines[index] = lines[index].replace(/"version":\s*"[^"]+"/, `"version": "${requested}"`);
+    rewritten += 1;
+  }
+  if (!rewritten) throw new Error("Could not rewrite the version in package-lock.json.");
+  fs.writeFileSync(lockPath, lines.join("\n"), "utf8");
+  console.log(`  package-lock.json version → ${requested} (${rewritten} field(s))`);
+}
+
 // ---------------------------------------------------------------- 1. version
 step("Version");
 const packagePath = path.join(root, "package.json");
@@ -94,6 +120,7 @@ if (requested) {
     if (updated === raw) throw new Error("Could not rewrite the version in package.json.");
     fs.writeFileSync(packagePath, updated, "utf8");
     console.log(`  package.json version ${version} → ${requested}`);
+    rewriteLockfileVersion(requested);
   }
   version = requested;
 }

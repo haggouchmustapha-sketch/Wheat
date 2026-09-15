@@ -237,3 +237,32 @@ test("a blank RC or patente never interrupts the identity save, and review never
     expect(complete.confirmed.join(" ")).toContain(patente);
   }
 });
+
+test("the VAT-liability row can give way rather than push the counterparty form wide", () => {
+  /*
+   * "Assujetti à la TVA" sits beside RC, patente, CNSS and RIB in a row whose
+   * label is the only part that can shrink. A flex item defaults to
+   * `min-width: auto` and refuses to go below its content, so without this the
+   * label held the row at its full text width and the form overflowed at 125%
+   * zoom and on narrow office displays. `tests/viewport-layout-regression.cjs`
+   * catches the overflow; this names the two declarations that prevent it, so
+   * losing one is a failure with an explanation rather than a mystery.
+   */
+  const css = fs.readFileSync(path.join(root, "src", "components", "OperationalAccounting.css"), "utf8");
+
+  const checkLabel = css.match(/\.op-field--check\s*>\s*span\s*\{[^}]*\}/);
+  expect(checkLabel, ".op-field--check > span must exist").toBeTruthy();
+  expect(checkLabel[0]).toMatch(/min-width:\s*0/);
+
+  const checkRow = css.match(/\.op-field--check\s*\{[^}]*\}/);
+  expect(checkRow, ".op-field--check must exist").toBeTruthy();
+  // The sizing token has to be one the stylesheet actually defines.
+  expect(checkRow[0]).toMatch(/var\(--control-height\)/);
+
+  const tokens = fs.readFileSync(path.join(root, "src", "styles", "tokens.css"), "utf8");
+  expect(tokens).toMatch(/--control-height:\s*\d/);
+  // `--control-height-base` never existed; a rule asking for it silently sized
+  // the row from nothing at all.
+  expect(css).not.toContain("--control-height-base");
+  expect(tokens).not.toContain("--control-height-base");
+});

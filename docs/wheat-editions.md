@@ -375,6 +375,32 @@ cross-env WHEAT_EDITION=lightweight npx playwright test tests/wheat-reporting-un
 
 ---
 
+## What a packaged build has now proven
+
+Measured on the development machine (Windows 11, packaged builds of
+2.1.2609151), so they are real numbers from real installers rather than
+estimates — but from **one** machine, and a fast one.
+
+| | Standard | Lightweight |
+|---|---|---|
+| Installer | 1 399 315 854 B (1334 MB) | 307 209 857 B (293 MB), **-78 %** |
+| Installed footprint | 3.2 GB, 27 457 files | 1.1 GB, 402 files |
+| Window up (process start -> renderer) | 2.03 s | 2.15 s |
+| Usable interface | 4.11 s | **2.52 s** |
+| First contentful paint | 600 ms | (no paint entry recorded) |
+| Resident at t+20 s | 673 MB app + 1021 MB recognition pool | 662 MB app, no pool |
+| Initial renderer payload | 865 KB over 4 files, 24 further chunks loaded on first visit | same |
+
+The recognition pool is the whole of the difference at rest: Standard warms it
+at startup and holds about a gigabyte for it; Lightweight never starts one.
+
+The cloud path was proven end to end from a packaged Lightweight build against
+real OpenRouter infrastructure — browser authorisation, loopback callback, PKCE
+exchange, `safeStorage`, automatic resume of the original import, and real
+recognition by a free vision model, persisting across a restart. Four of five
+cloud readings answered; the fifth fell back to Tesseract and the document was
+still read.
+
 ## Real-machine testing still required
 
 None of the following can be established from this repository. They are the
@@ -393,9 +419,7 @@ list to work through on hardware before calling a two-edition release done.
 
 **Cloud reading**
 
-- A packaged build completing the OpenRouter PKCE callback — the loopback
-  server and `shell.openExternal` under NSIS install conditions, and with
-  Windows Firewall prompting on first listen.
+- The PKCE callback under **NSIS install conditions**. The flow itself is proven from a packaged build (loopback server, system browser, exchange, vault, automatic resume); it was driven from the packaged directory rather than an NSIS-installed copy, so Windows Firewall prompting on first listen is still untried.
 - A poor connection: slow upload of a page image, and a timeout mid-import.
 - Disconnecting the network **during** an import, and confirming the Tesseract
   fallback takes over rather than the import failing.
@@ -407,9 +431,7 @@ list to work through on hardware before calling a two-edition release done.
 
 - Windows Defender and SmartScreen on both installers (neither is
   code-signed; the Lightweight one is new and has no reputation at all).
-- Update Standard → Standard and Lightweight → Lightweight against a real
-  published release.
-- Manual switch Standard → Lightweight and back, confirming the dossier,
-  documents, backups and settings survive both directions.
+- Update Standard to Standard and Lightweight to Lightweight on a real machine. Artifact selection, the editions signature and the refusal to cross editions are verified against 2.1.2609151's actual signed manifest; what is untried is a machine downloading and installing it.
+- Manual switch Standard to Lightweight and back **through the installers**. Both packaged editions have been run against the same `%APPDATA%\Wheat\` in turn, each reading the other's dossier and documents unchanged, so the data claim holds; the uninstall/install mechanics are what remain.
 - An existing 2.1.x installation updated to the first two-edition release,
   confirming it lands on Standard.

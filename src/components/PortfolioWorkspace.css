@@ -1,0 +1,209 @@
+/*
+ * Portfolio workspace.
+ *
+ * Local aliases resolve to the shared tokens, as every other workspace does, so
+ * the screen follows the theme instead of carrying its own colours.
+ */
+.pf-shell {
+  --pf-ink: var(--text);
+  --pf-muted: var(--text-muted);
+  --pf-line: var(--line);
+  --pf-surface: var(--surface);
+  --pf-sunken: var(--surface-sunken);
+  --pf-brand: var(--brand);
+  --pf-warn: var(--warning);
+
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  color: var(--pf-ink);
+}
+
+.pf-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.pf-head__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.pf-title {
+  margin: 0;
+  font-size: var(--text-xl);
+  font-weight: var(--weight-semibold, 600);
+}
+
+.pf-subtitle,
+.pf-bank,
+.pf-vat {
+  margin: 0;
+  color: var(--pf-muted);
+  font-size: var(--text-xs);
+}
+
+.pf-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--pf-muted);
+  font-size: var(--text-xs);
+}
+
+.pf-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: var(--text-sm);
+}
+
+.pf-empty {
+  margin: 0;
+  padding: var(--space-6);
+  border: 1px dashed var(--pf-line);
+  border-radius: var(--radius-md);
+  color: var(--pf-muted);
+  text-align: center;
+}
+
+.pf-totals {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--space-3);
+}
+
+.pf-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--pf-line);
+  border-radius: var(--radius-md);
+  background: var(--pf-sunken);
+}
+
+.pf-tile__value {
+  font-family: var(--font-numeric);
+  font-size: var(--text-xl);
+  font-weight: var(--weight-semibold, 600);
+}
+
+.pf-tile__label {
+  color: var(--pf-muted);
+  font-size: var(--text-2xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.pf-tile__note {
+  font-family: var(--font-numeric);
+  color: var(--pf-muted);
+  font-size: var(--text-xs);
+}
+
+.pf-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: var(--space-4);
+}
+
+.pf-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--pf-line);
+  border-radius: var(--radius-lg);
+  background: var(--pf-surface);
+}
+
+.pf-card--active {
+  border-color: var(--pf-brand);
+  box-shadow: var(--shadow-xs);
+}
+
+.pf-card__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.pf-card__name {
+  margin: 0;
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold, 600);
+}
+
+.pf-card__meta {
+  margin: 2px 0 0;
+  color: var(--pf-muted);
+  font-size: var(--text-2xs);
+}
+
+.pf-figures {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.pf-figures dt {
+  color: var(--pf-muted);
+  font-size: var(--text-2xs);
+}
+
+.pf-figures dd {
+  margin: 2px 0 0;
+  font-family: var(--font-numeric);
+  font-size: var(--text-sm);
+}
+
+.pf-figure--warn {
+  color: var(--pf-warn);
+}
+
+.pf-reasons {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pf-reasons li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--pf-sunken);
+  font-size: var(--text-xs);
+}
+
+.pf-count {
+  font-family: var(--font-numeric);
+  color: var(--pf-muted);
+}
+
+.pf-clear {
+  margin: 0;
+  color: var(--pf-muted);
+  font-size: var(--text-xs);
+}
+
+@media (max-width: 720px) {
+  .pf-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .pf-figures {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

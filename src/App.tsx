@@ -74,13 +74,8 @@ import {
   type SageOutputKind,
   type SageTxtProfile,
 } from "./lib/sageTxt";
-import { OperationalAccounting, ReconciliationWorkbench } from "./components/OperationalAccounting";
-import { BooksWorkspace13 } from "./components/BooksWorkspace13";
-import { ComplianceWorkspace14 } from "./components/ComplianceWorkspace14";
-import { FiscalWorkspace, WheatAiWorkspace } from "./components/FiscalWorkspace";
 import { WheatSelect, type WheatSelectOption } from "./components/ui/WheatSelect";
 import { WheatAiMark, WheatMark } from "./components/ui/brand";
-import { WheatAiProviderSettings } from "./components/WheatAiProviderSettings";
 import { UpdateDownloadProgress, WheatUpdateNotices } from "./components/WheatUpdate";
 import { formatUpdateDateTime, updateStatusLabel } from "./lib/updateStatus";
 import {
@@ -117,11 +112,12 @@ import { useWheatReview } from "./lib/useWheatReview";
 import { ocrCheckIssues } from "./lib/ocrCheckIssues";
 import { flushAllFormDrafts, useDraftedForm } from "./lib/useFormDraft";
 import { DossierSetupGate } from "./components/DossierSetupGate";
+import { WheatCloudGateDialog, WheatCloudPanel, type CloudGate } from "./components/WheatCloudAccess";
 import { useGuidedJourney } from "./lib/useGuidedJourney";
 import { GuidedJourney } from "./components/GuidedJourney";
-import { GuidedWork } from "./components/GuidedWork";
 import { clearTransientDocumentState, confirmWithAppFocus } from "./lib/confirmWithAppFocus";
 import { WHEAT_APP_VERSION, WHEAT_RELEASE_LABEL } from "./appVersion";
+import { WHEAT_EDITION_PROFILE } from "./wheatEdition";
 import licenseText from "../LICENSE?raw";
 import "./styles/tokens.css";
 import "./styles/components.css";
@@ -132,12 +128,63 @@ import "./SingleFont.css";
 const VatChart = lazy(() => import("./components/DashboardCharts").then((module) => ({ default: module.VatChart })));
 const MetricSparkline = lazy(() => import("./components/DashboardCharts").then((module) => ({ default: module.MetricSparkline })));
 
+/**
+ * The large workspaces, loaded when somebody opens them.
+ *
+ * Each of these is thousands of lines that only one page renders, and every one
+ * of them used to be parsed, evaluated and held in memory before the first
+ * screen appeared — on every launch, whether or not anybody went there. Making
+ * them route-level chunks costs nothing in behaviour: they were already mounted
+ * only on their own page.
+ *
+ * This is not an edition difference. It is straightforwardly better on a
+ * sixteen-gigabyte workstation too, so both editions get it.
+ */
+const OperationalAccounting = lazy(() => import("./components/OperationalAccounting").then((module) => ({ default: module.OperationalAccounting })));
+const ReconciliationWorkbench = lazy(() => import("./components/OperationalAccounting").then((module) => ({ default: module.ReconciliationWorkbench })));
+const BooksWorkspace13 = lazy(() => import("./components/BooksWorkspace13").then((module) => ({ default: module.BooksWorkspace13 })));
+const ComplianceWorkspace14 = lazy(() => import("./components/ComplianceWorkspace14").then((module) => ({ default: module.ComplianceWorkspace14 })));
+const FiscalWorkspace = lazy(() => import("./components/FiscalWorkspace").then((module) => ({ default: module.FiscalWorkspace })));
+const WheatAiWorkspace = lazy(() => import("./components/FiscalWorkspace").then((module) => ({ default: module.WheatAiWorkspace })));
+const GuidedWork = lazy(() => import("./components/GuidedWork").then((module) => ({ default: module.GuidedWork })));
+const PortfolioWorkspace = lazy(() => import("./components/PortfolioWorkspace"));
+const WheatAiProviderSettings = lazy(() => import("./components/WheatAiProviderSettings").then((module) => ({ default: module.WheatAiProviderSettings })));
+
+/**
+ * The frame a workspace appears in while its chunk arrives.
+ *
+ * A Wheat loading state rather than a blank area: on a slow disk the gap is
+ * real, and an empty page reads as a broken one.
+ */
+/**
+ * What the documents screen says is going to read the next page.
+ *
+ * One sentence, stated rather than implied, because it is the one thing about
+ * a scan an accountant may need to know: whether the page stays on this
+ * computer. It is derived from what the main process reports — the engines it
+ * will actually try, in order — not from the edition, so a Standard machine
+ * whose local runtime is missing says so instead of claiming otherwise.
+ */
+function ocrEngineLabel(status: { available: boolean; version: string | null; engineOrder?: Array<"paddle" | "cloud" | "tesseract">; cloud?: { connected: boolean } | null }) {
+  const first = status.engineOrder?.[0];
+  if (first === "paddle" && status.available) return `Moteur PaddleOCR ${status.version ?? ""} (local)`.trim();
+  if (first === "cloud") {
+    return status.cloud?.connected ? "Wheat Cloud AI (lecture en ligne)" : "Wheat Cloud AI à activer";
+  }
+  return "Moteur Tesseract local (repli)";
+}
+
+function WorkspaceChunk({ label, children }: { label: string; children: ReactNode }) {
+  return <Suspense fallback={<LoadingState label={label} />}>{children}</Suspense>;
+}
+
 type Page =
   | "home"
   | "guided"
   | "production"
   | "dashboard"
   | "companies"
+  | "portfolio"
   | "entries"
   | "documents"
   | "billing"
@@ -254,6 +301,7 @@ const navItems: Array<{ page: Page; label: string; icon: any }> = [
   { page: "production", label: "Production du jour", icon: Sparkles },
   { page: "dashboard", label: "Tableau de bord", icon: BarChart3 },
   { page: "companies", label: "Dossiers", icon: Building2 },
+  { page: "portfolio", label: "Portefeuille", icon: ListChecks },
   { page: "entries", label: "Écritures", icon: BookOpen },
   { page: "documents", label: "Documents & OCR", icon: FileText },
   { page: "billing", label: "Factures & paiements", icon: Banknote },
@@ -281,7 +329,7 @@ const navGroups: NavGroup[] = [
   {
     id: "dossiers",
     label: { fr: "Dossiers", en: "Client files", ar: "الملفات" },
-    pages: ["companies"],
+    pages: ["companies", "portfolio"],
   },
   {
     id: "saisie",
@@ -326,6 +374,7 @@ const pagePurpose: Record<Page, string> = {
   production: "La file de travail du jour, dans l'ordre : pièces, OCR, comptabilisation, banque, TVA.",
   dashboard: "Les chiffres clés du dossier : trésorerie, encours clients, TVA et alertes.",
   companies: "Créer, ouvrir et basculer entre les dossiers (sociétés) gérés sur ce poste.",
+  portfolio: "Ce qui attend dans chaque dossier du poste, pour savoir où aller sans les ouvrir un par un.",
   entries: "Saisir et comptabiliser les écritures, la brique de base de la comptabilité.",
   documents: "Importer factures et justificatifs, lire les montants automatiquement (OCR) et les contrôler.",
   billing: "Factures de vente et d'achat, avoirs, tiers et règlements.",
@@ -349,6 +398,7 @@ const pageShortHelp: Record<Page, string> = {
   production: "Traiter la journée",
   dashboard: "Voir les chiffres",
   companies: "Choisir le dossier",
+  portfolio: "Voir tous les dossiers",
   entries: "Saisir au journal",
   documents: "Lire les pièces",
   billing: "Facturer et encaisser",
@@ -393,6 +443,7 @@ const navLabels: Record<AppLanguage, Partial<Record<Page, string>>> = {
     production: "Production du jour",
     dashboard: "Tableau de bord",
     companies: "Dossiers",
+    portfolio: "Portefeuille",
     entries: "Écritures",
     documents: "Documents & OCR",
     billing: "Factures & paiements",
@@ -414,6 +465,7 @@ const navLabels: Record<AppLanguage, Partial<Record<Page, string>>> = {
     production: "Daily production",
     dashboard: "Dashboard",
     companies: "Client files",
+    portfolio: "Portfolio",
     entries: "Journal entries",
     documents: "Documents & OCR",
     billing: "Invoices & payments",
@@ -435,6 +487,7 @@ const navLabels: Record<AppLanguage, Partial<Record<Page, string>>> = {
     production: "إنتاج اليوم",
     dashboard: "لوحة القيادة",
     companies: "الملفات",
+    portfolio: "المحفظة",
     entries: "القيود",
     documents: "الوثائق",
     billing: "الفواتير والمدفوعات",
@@ -1931,13 +1984,15 @@ function App() {
                     onNotify={notify}
                     onUnlocked={() => { void refreshDossierSetup(); }}
                   />
-                  <GuidedWork
-                    companyId={activeCompanyId ?? null}
-                    onOpen={openGuidedTarget}
-                    refreshToken={guidedRefreshToken}
-                    onChanged={async () => { await refresh(); await reloadJourney(); }}
-                    notify={notify}
-                  />
+                  <WorkspaceChunk label="Chargement du travail guidé…">
+                    <GuidedWork
+                      companyId={activeCompanyId ?? null}
+                      onOpen={openGuidedTarget}
+                      refreshToken={guidedRefreshToken}
+                      onChanged={async () => { await refresh(); await reloadJourney(); }}
+                      notify={notify}
+                    />
+                  </WorkspaceChunk>
                 </>
               )}
               {page === "production" && (
@@ -1979,6 +2034,17 @@ function App() {
                   deleteCompany={deleteCompany}
                   setPage={setPage}
                 />
+              )}
+              {page === "portfolio" && (
+                <PageFrame page="portfolio" language={language} icon={<ListChecks size={18} aria-hidden="true" />}>
+                  <WorkspaceChunk label="Chargement du portefeuille…">
+                    <PortfolioWorkspace
+                      activeCompanyId={activeCompanyId}
+                      onOpenDossier={switchCompany}
+                      onNotify={notify}
+                    />
+                  </WorkspaceChunk>
+                </PageFrame>
               )}
               {page === "entries" && (
                 <EntriesPage
@@ -2029,15 +2095,17 @@ function App() {
                     ),
                   }}
                 >
-                  <OperationalAccounting
-                    companyId={currentCompany.id}
-                    companyName={currentCompany.name}
-                    currency={currentCompany.baseCurrency ?? "MAD"}
-                    accounts={currentCompany.accounts ?? []}
-                    bankAccounts={data.bankAccounts ?? []}
-                    onChanged={refresh}
-                    onNotify={operationalNotify}
-                  />
+                  <WorkspaceChunk label="Chargement de la comptabilité opérationnelle…">
+                    <OperationalAccounting
+                      companyId={currentCompany.id}
+                      companyName={currentCompany.name}
+                      currency={currentCompany.baseCurrency ?? "MAD"}
+                      accounts={currentCompany.accounts ?? []}
+                      bankAccounts={data.bankAccounts ?? []}
+                      onChanged={refresh}
+                      onNotify={operationalNotify}
+                    />
+                  </WorkspaceChunk>
                 </PageFrame>
               )}
               {page === "reconciliation" && currentCompany && (
@@ -2062,14 +2130,16 @@ function App() {
                     ),
                   }}
                 >
-                  <ReconciliationWorkbench
-                    companyId={currentCompany.id}
-                    initialMovementId={window.sessionStorage.getItem(reconciliationFocusKey) ?? undefined}
-                    openBatch={reconciliationBatch}
-                    onImportStatement={importBankStatement}
-                    onChanged={refresh}
-                    onNotify={operationalNotify}
-                  />
+                  <WorkspaceChunk label="Chargement du rapprochement bancaire…">
+                    <ReconciliationWorkbench
+                      companyId={currentCompany.id}
+                      initialMovementId={window.sessionStorage.getItem(reconciliationFocusKey) ?? undefined}
+                      openBatch={reconciliationBatch}
+                      onImportStatement={importBankStatement}
+                      onChanged={refresh}
+                      onNotify={operationalNotify}
+                    />
+                  </WorkspaceChunk>
                 </PageFrame>
               )}
               {page === "vat" && currentCompany && (
@@ -2094,15 +2164,17 @@ function App() {
                     ),
                   }}
                 >
-                  <ComplianceWorkspace14
-                    companyId={currentCompany.id}
-                    companyName={currentCompany.name}
-                    currency={currentCompany.baseCurrency ?? "MAD"}
-                    accounts={currentCompany.accounts ?? []}
-                    documents={data.documents ?? []}
-                    onChanged={refresh}
-                    onNotify={operationalNotify}
-                  />
+                  <WorkspaceChunk label="Chargement de la TVA et de la conformité…">
+                    <ComplianceWorkspace14
+                      companyId={currentCompany.id}
+                      companyName={currentCompany.name}
+                      currency={currentCompany.baseCurrency ?? "MAD"}
+                      accounts={currentCompany.accounts ?? []}
+                      documents={data.documents ?? []}
+                      onChanged={refresh}
+                      onNotify={operationalNotify}
+                    />
+                  </WorkspaceChunk>
                 </PageFrame>
               )}
               {page === "payroll" && (
@@ -2152,18 +2224,20 @@ function App() {
                     ),
                   }}
                 >
-                  <BooksWorkspace13
-                    companyId={currentCompany.id}
-                    companyName={currentCompany.name}
-                    currency={currentCompany.baseCurrency ?? "MAD"}
-                    accounts={currentCompany.accounts ?? []}
-                    journals={currentCompany.journals ?? []}
-                    initialTab={page === "books" ? "configuration" : "reports"}
-                    onChanged={refresh}
-                    onNotify={operationalNotify}
-                    exportRows={exportRows}
-                    exportPdf={exportPdf}
-                  />
+                  <WorkspaceChunk label="Chargement des livres comptables…">
+                    <BooksWorkspace13
+                      companyId={currentCompany.id}
+                      companyName={currentCompany.name}
+                      currency={currentCompany.baseCurrency ?? "MAD"}
+                      accounts={currentCompany.accounts ?? []}
+                      journals={currentCompany.journals ?? []}
+                      initialTab={page === "books" ? "configuration" : "reports"}
+                      onChanged={refresh}
+                      onNotify={operationalNotify}
+                      exportRows={exportRows}
+                      exportPdf={exportPdf}
+                    />
+                  </WorkspaceChunk>
                 </PageFrame>
               )}
               {page === "fiscal" && currentCompany && (
@@ -2188,14 +2262,16 @@ function App() {
                     ),
                   }}
                 >
-                  <FiscalWorkspace
-                    company={currentCompany}
-                    documents={data.documents ?? []}
-                    currency={data.currency}
-                    initialTab="fiscal"
-                    onChanged={refresh}
-                    onNotify={operationalNotify}
-                  />
+                  <WorkspaceChunk label="Chargement du dossier fiscal…">
+                    <FiscalWorkspace
+                      company={currentCompany}
+                      documents={data.documents ?? []}
+                      currency={data.currency}
+                      initialTab="fiscal"
+                      onChanged={refresh}
+                      onNotify={operationalNotify}
+                    />
+                  </WorkspaceChunk>
                 </PageFrame>
               )}
               {page === "statements" && currentCompany && (
@@ -2220,13 +2296,15 @@ function App() {
                     ),
                   }}
                 >
-                  <FiscalWorkspace
-                    company={currentCompany}
-                    documents={data.documents ?? []}
-                    currency={currentCompany.baseCurrency ?? "MAD"}
-                    onChanged={refresh}
-                    onNotify={operationalNotify}
-                  />
+                  <WorkspaceChunk label="Chargement du dossier fiscal…">
+                    <FiscalWorkspace
+                      company={currentCompany}
+                      documents={data.documents ?? []}
+                      currency={currentCompany.baseCurrency ?? "MAD"}
+                      onChanged={refresh}
+                      onNotify={operationalNotify}
+                    />
+                  </WorkspaceChunk>
                 </PageFrame>
               )}
               {page === "wheat-ai" && currentCompany && (
@@ -2251,27 +2329,29 @@ function App() {
                     ),
                   }}
                 >
-                  <WheatAiWorkspace
-                    company={currentCompany}
-                    onChanged={refresh}
-                    onNotify={operationalNotify}
-                    onNavigate={(target) => {
-                      const destinations: Record<string, Page> = {
-                        dashboard: "dashboard",
-                        entries: "entries",
-                        documents: "documents",
-                        invoices: "billing",
-                        banking: "reconciliation",
-                        reports: "reports",
-                        bilan: "statements",
-                        fiscal: "fiscal",
-                        vat: "vat",
-                        settings: "settings",
-                        "wheat-ai": "wheat-ai",
-                      };
-                      setPage(destinations[target] ?? "home");
-                    }}
-                  />
+                  <WorkspaceChunk label="Chargement de Wheat AI…">
+                    <WheatAiWorkspace
+                      company={currentCompany}
+                      onChanged={refresh}
+                      onNotify={operationalNotify}
+                      onNavigate={(target) => {
+                        const destinations: Record<string, Page> = {
+                          dashboard: "dashboard",
+                          entries: "entries",
+                          documents: "documents",
+                          invoices: "billing",
+                          banking: "reconciliation",
+                          reports: "reports",
+                          bilan: "statements",
+                          fiscal: "fiscal",
+                          vat: "vat",
+                          settings: "settings",
+                          "wheat-ai": "wheat-ai",
+                        };
+                        setPage(destinations[target] ?? "home");
+                      }}
+                    />
+                  </WorkspaceChunk>
                 </PageFrame>
               )}
               {page === "sage" && <SageExportPage data={data} currentCompany={currentCompany} exportRows={exportRows} notify={notify} />}
@@ -4659,6 +4739,13 @@ function DocumentsPage({ data, currentCompany, notify, refresh, postDocumentEntr
   const [correctedDocumentType, setCorrectedDocumentType] = useState("UNKNOWN");
   const [ocrBusy, setOcrBusy] = useState(false);
   /**
+   * An import waiting on one authorisation, holding the files already chosen.
+   *
+   * Never an error state and never a lost selection: the dialog obtains what is
+   * missing and hands these exact paths straight back to `processFiles`.
+   */
+  const [cloudGate, setCloudGate] = useState<CloudGate | null>(null);
+  /**
    * Progress of the running batch, pushed by the main process per document.
    *
    * Thirty invoices take minutes whatever the pipeline does with them. Without
@@ -4668,7 +4755,13 @@ function DocumentsPage({ data, currentCompany, notify, refresh, postDocumentEntr
   const [ocrProgress, setOcrProgress] = useState<{ completed: number; total: number; fileName: string } | null>(null);
   const [dragging, setDragging] = useState(false);
   const [ocrStatus, setOcrStatus] = useState("");
-  const [paddleStatus, setPaddleStatus] = useState<{ available: boolean; version: string | null; reason: string | null } | null>(null);
+  const [paddleStatus, setPaddleStatus] = useState<{
+    available: boolean;
+    version: string | null;
+    reason: string | null;
+    engineOrder?: Array<"paddle" | "cloud" | "tesseract">;
+    cloud?: { connected: boolean } | null;
+  } | null>(null);
   const [scanPreview, setScanPreview] = useState<any>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; document: any } | null>(null);
 
@@ -4872,6 +4965,17 @@ function DocumentsPage({ data, currentCompany, notify, refresh, postDocumentEntr
     setOcrStatus(targetPaths.length > 1 ? `${copy.importingDocument} (${targetPaths.length} pièces)` : copy.importingDocument);
     try {
       const result = await window.wheat.smartOcrProcess({ companyId: currentCompany.id, filePaths: targetPaths });
+      if (result?.cloudAuthorization?.required) {
+        // Nothing was read and nothing was written. The selection is held, the
+        // person is asked the one question that is missing, and the same import
+        // runs again from the dialog.
+        setCloudGate({
+          reason: result.cloudAuthorization.reason === "CONSENT_REQUIRED" ? "CONSENT_REQUIRED" : "NOT_CONNECTED",
+          filePaths: result.cloudAuthorization.filePaths?.length ? result.cloudAuthorization.filePaths : targetPaths,
+        });
+        setOcrStatus("Lecture en attente : Wheat Cloud AI doit être activé pour lire ces pièces.");
+        return;
+      }
       const created = result?.documents ?? [];
       const rejections = result?.rejections ?? [];
       if (created.length) {
@@ -4893,6 +4997,10 @@ function DocumentsPage({ data, currentCompany, notify, refresh, postDocumentEntr
       // Refusals are named rather than silently dropped: "28 retenues, 2
       // ignorées" is only useful if the two can be identified.
       if (rejections.length) notify(rejections.map((item: any) => item.reason).join(" "), "warning");
+      // The documents were read by the local engine, so this is a notice and
+      // not a failure — but an accountant whose cloud reading silently stopped
+      // working deserves the sentence that says why.
+      for (const notice of result?.cloudNotices ?? []) notify(notice.message, "warning");
     } catch (error) {
       const message = error instanceof Error ? error.message : copy.importFailed;
       setOcrStatus(`${copy.importFailed}: ${message}`);
@@ -5108,7 +5216,7 @@ function DocumentsPage({ data, currentCompany, notify, refresh, postDocumentEntr
             {paddleStatus && (
               <span title={paddleStatus.reason ?? "Reconnaissance de texte exécutée sur cet ordinateur"}>
                 <ShieldCheck size={13} aria-hidden="true" />
-                {paddleStatus.available ? `Moteur PaddleOCR ${paddleStatus.version ?? ""} (local)` : "Moteur Tesseract local (repli)"}
+                {ocrEngineLabel(paddleStatus)}
               </span>
             )}
           </>
@@ -5388,6 +5496,15 @@ function DocumentsPage({ data, currentCompany, notify, refresh, postDocumentEntr
           )}
         </Card>
       </div>
+
+      {cloudGate && (
+        <WheatCloudGateDialog
+          gate={cloudGate}
+          notify={notify}
+          onCancel={() => { setCloudGate(null); setOcrStatus(""); }}
+          onResume={(filePaths) => { setCloudGate(null); void processFiles(filePaths); }}
+        />
+      )}
 
       <AnimatePresence>
         {contextMenu && (
@@ -6912,6 +7029,7 @@ function SettingsPage({ data, darkMode, setDarkMode, createBackup, restoreBackup
           <>
             <span><HardDrive size={13} aria-hidden="true" /> {copy.cloud}</span>
             <span><BadgeCheck size={13} aria-hidden="true" /> Wheat {data?.appVersion ?? WHEAT_APP_VERSION}</span>
+            <span title={WHEAT_EDITION_PROFILE.summary}><HardDrive size={13} aria-hidden="true" /> {WHEAT_EDITION_PROFILE.label}</span>
           </>
         }
         guide={[
@@ -6976,7 +7094,12 @@ function SettingsPage({ data, darkMode, setDarkMode, createBackup, restoreBackup
         </Card>
       </div>
 
-      <WheatAiProviderSettings notify={notify} activeCompanyId={data?.activeCompanyId} />
+      {/* The accountant's surface first, the developer's surface after it. */}
+      <WheatCloudPanel notify={notify} />
+
+      <WorkspaceChunk label="Chargement des réglages des fournisseurs IA…">
+        <WheatAiProviderSettings notify={notify} activeCompanyId={data?.activeCompanyId} />
+      </WorkspaceChunk>
 
       <div className="wt-split wt-split--even">
         <Card
@@ -7067,6 +7190,9 @@ function SettingsPage({ data, darkMode, setDarkMode, createBackup, restoreBackup
           <div aria-live="polite" className="wt-stack wt-stack--tight">
             <dl className="wt-kv">
               <div><dt>Version installée</dt><dd>Wheat {data?.appVersion ?? WHEAT_APP_VERSION}</dd></div>
+              {/* Both editions share one version. The edition is separate
+                  metadata, and a mise à jour never changes it. */}
+              <div><dt>Édition</dt><dd title={WHEAT_EDITION_PROFILE.summary}>{WHEAT_EDITION_PROFILE.label}</dd></div>
               <div>
                 <dt>Dernière vérification</dt>
                 <dd>{updateStatus?.lastCheckedAt ? formatUpdateDateTime(updateStatus.lastCheckedAt) : "Jamais"}</dd>
@@ -7692,6 +7818,17 @@ function CompanyIdentityDialog({ company, onClose, onSaved, notify, requestRevie
     taxId: String(company?.taxId ?? ""),
     city: String(company?.city ?? ""),
     vatFrequency: company?.vatFrequency === "QUARTERLY" ? "QUARTERLY" : "MONTHLY",
+    rc: String(company?.rc ?? ""),
+    rcTribunal: String(company?.rcTribunal ?? ""),
+    patente: String(company?.patente ?? ""),
+    cnssAffiliation: String(company?.cnssAffiliation ?? ""),
+    address: String(company?.address ?? ""),
+    phone: String(company?.phone ?? ""),
+    email: String(company?.email ?? ""),
+    activitySector: String(company?.activitySector ?? ""),
+    // Money reaches the renderer as a MAD decimal alias beside the exact
+    // centimes, so the field is edited in dirhams and parsed back on save.
+    capital: company?.capital === undefined || company?.capital === null ? "" : String(company.capital),
   });
 
   // What guided work is still waiting for, named field by field rather than as
@@ -7702,6 +7839,8 @@ function CompanyIdentityDialog({ company, onClose, onSaved, notify, requestRevie
     !form.city.trim() && "la ville",
     !form.ice.trim() && "l'ICE",
     !form.taxId.trim() && "l'identifiant fiscal",
+    !form.rc.trim() && "le registre de commerce",
+    !form.patente.trim() && "la patente",
   ].filter(Boolean) as string[];
 
   const submit = async (event?: FormEvent) => {
@@ -7712,10 +7851,13 @@ function CompanyIdentityDialog({ company, onClose, onSaved, notify, requestRevie
       setError("L'enregistrement de l'identité n'est disponible que dans l'application Wheat.");
       return;
     }
+    const { capital, ...identity } = form;
     const payload = {
       companyId: company.id,
       expectedVersion: company.version ?? 1,
-      ...form,
+      ...identity,
+      // Sent in dirhams; the company service converts to exact centimes.
+      capitalCents: capital.trim(),
     };
     setBusy(true);
     try {
@@ -7738,7 +7880,7 @@ function CompanyIdentityDialog({ company, onClose, onSaved, notify, requestRevie
   return (
     <Dialog
       title="Identité du dossier"
-      note="L'ICE, l'identifiant fiscal, la forme juridique et la ville sont des mentions obligatoires des factures marocaines."
+      note="L'ICE, l'identifiant fiscal, le registre de commerce, la patente, la forme juridique et la ville sont des mentions obligatoires des factures marocaines."
       icon={<Building2 size={18} aria-hidden="true" />}
       onClose={() => { if (!busy) onClose(); }}
       footerNote="Vous revenez au travail guidé après l'enregistrement."
@@ -7782,6 +7924,33 @@ function CompanyIdentityDialog({ company, onClose, onSaved, notify, requestRevie
               ariaLabel="Périodicité de la TVA"
               searchable={false}
             />
+          </Field>
+          <Field label="Registre de commerce (RC)" htmlFor="identity-rc" tip="Le numéro d'immatriculation au registre de commerce, mention obligatoire des factures.">
+            <input id="identity-rc" className="wt-input" value={form.rc} onChange={(event) => setForm((current) => ({ ...current, rc: event.target.value }))} />
+          </Field>
+          <Field label="Tribunal du RC" htmlFor="identity-rc-tribunal" hint="Le tribunal de commerce qui tient le registre.">
+            <input id="identity-rc-tribunal" className="wt-input" value={form.rcTribunal} onChange={(event) => setForm((current) => ({ ...current, rcTribunal: event.target.value }))} />
+          </Field>
+          <Field label="Patente / taxe professionnelle" htmlFor="identity-patente" tip="Le numéro d'article de la taxe professionnelle, mention obligatoire des factures.">
+            <input id="identity-patente" className="wt-input" value={form.patente} onChange={(event) => setForm((current) => ({ ...current, patente: event.target.value }))} />
+          </Field>
+          <Field label="Affiliation CNSS" htmlFor="identity-cnss" hint="Le numéro d'affiliation employeur, utilisé par les déclarations sociales.">
+            <input id="identity-cnss" className="wt-input" value={form.cnssAffiliation} onChange={(event) => setForm((current) => ({ ...current, cnssAffiliation: event.target.value }))} />
+          </Field>
+          <Field label="Capital social" htmlFor="identity-capital" hint="En dirhams.">
+            <input id="identity-capital" className="wt-input" inputMode="decimal" value={form.capital} onChange={(event) => setForm((current) => ({ ...current, capital: event.target.value }))} />
+          </Field>
+          <Field label="Secteur d'activité" htmlFor="identity-sector">
+            <input id="identity-sector" className="wt-input" value={form.activitySector} onChange={(event) => setForm((current) => ({ ...current, activitySector: event.target.value }))} />
+          </Field>
+          <Field label="Adresse" htmlFor="identity-address" className="wt-span-all" hint="Telle qu'elle doit figurer sur les factures et les déclarations.">
+            <input id="identity-address" className="wt-input" value={form.address} onChange={(event) => setForm((current) => ({ ...current, address: event.target.value }))} />
+          </Field>
+          <Field label="Téléphone" htmlFor="identity-phone">
+            <input id="identity-phone" className="wt-input" inputMode="tel" value={form.phone} onChange={(event) => setForm((current) => ({ ...current, phone: event.target.value }))} />
+          </Field>
+          <Field label="E-mail" htmlFor="identity-email">
+            <input id="identity-email" className="wt-input" inputMode="email" value={form.email} onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))} />
           </Field>
         </div>
         {error && <Callout tone="danger" title="L'identité n'a pas été enregistrée">{error}</Callout>}

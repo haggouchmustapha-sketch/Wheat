@@ -42,6 +42,7 @@ declare global {
       createBankLedgerAccount: (payload: unknown) => Promise<any>;
       queryReportEntries: (payload: unknown) => Promise<any>;
       getReportEntryDetail: (payload: unknown) => Promise<any>;
+      getPortfolioOverview: () => Promise<any>;
       getTrialBalance: (payload: unknown) => Promise<any>;
       getGeneralLedger: (payload: unknown) => Promise<any>;
       getJournalReport: (payload: unknown) => Promise<any>;
@@ -198,8 +199,58 @@ declare global {
       onSmartOcrProgress: (listener: (payload: any) => void) => () => void;
       /** Absolute path of a dropped File, via the preload's `webUtils` bridge. */
       getDroppedFilePath: (file: unknown) => string;
-      smartOcrProcess: (payload: unknown) => Promise<{ documents: any[]; rejections: Array<{ path: string; reason: string }>; truncated: boolean }>;
-      getPaddleOcrStatus: () => Promise<{ available: boolean; version: string | null; language: string; device: string; reason: string | null; vl16Installed?: boolean }>;
+      /**
+       * Runs the import. Returns the documents it filed — or, when this build
+       * needs Wheat Cloud AI to read a scan and it is not yet authorised,
+       * `cloudAuthorization` carrying the very files that were selected, so the
+       * interface can obtain the authorisation and resume the same import.
+       */
+      smartOcrProcess: (payload: unknown) => Promise<{
+        documents: any[];
+        rejections: Array<{ path: string; reason: string }>;
+        truncated: boolean;
+        cloudAuthorization?: { required: boolean; reason: "NOT_CONNECTED" | "CONSENT_REQUIRED"; filePaths: string[] };
+        /**
+         * Cloud readings that were attempted and did not work. The documents
+         * were still read, by the local fallback, so these are notices rather
+         * than failures — one per distinct problem, in product language.
+         */
+        cloudNotices?: Array<{ message: string; remedy: string }>;
+      }>;
+      getPaddleOcrStatus: () => Promise<{
+        available: boolean;
+        version: string | null;
+        language: string;
+        device: string;
+        reason: string | null;
+        vl16Installed?: boolean;
+        edition?: "standard" | "lightweight";
+        editionLabel?: string;
+        /** Engines this build tries, in order, for a scanned page. */
+        engineOrder?: Array<"paddle" | "cloud" | "tesseract">;
+        cloud?: {
+          connected: boolean;
+          documentOcrEnabled: boolean;
+          consentGiven: boolean;
+          providers: string[];
+          authorizationProvider: string;
+          canAuthorize: boolean;
+        } | null;
+      }>;
+      /** Which Wheat edition is installed. Compiled into the build. */
+      getAppEdition?: () => Promise<{
+        edition: "standard" | "lightweight";
+        label: string;
+        summary: string;
+        version: string;
+        visualProfile: "full" | "economical";
+        hasBundledLocalOcr: boolean;
+        cloudOcrByDefault: boolean;
+      }>;
+      getCloudStatus?: () => Promise<WheatCloudStatus>;
+      authorizeCloud?: () => Promise<WheatCloudStatus>;
+      disconnectCloud?: () => Promise<WheatCloudStatus>;
+      setCloudPreferences?: (payload: { documentOcrEnabled?: boolean; consentGiven?: boolean }) => Promise<WheatCloudStatus>;
       updateDocumentExtraction: (payload: unknown) => Promise<any>;
       deleteDocument: (documentId: string) => Promise<any>;
       /** `kind` is supplied only when a person settles a direction the document could not establish. */
@@ -257,6 +308,25 @@ declare global {
     assistedReviewRemoteConsent?: boolean;
     /** `null` is automatic; otherwise `ollama:<name>` or `remote:<provider>:<model>`. */
     assistedReviewModelId?: string | null;
+    /** Whether scanned pages may be read by the configured cloud provider. */
+    cloudDocumentOcr?: boolean;
+    /** Explicit consent that a selected document may be sent for analysis. */
+    cloudDocumentOcrConsent?: boolean;
+  };
+
+  /**
+   * Wheat Cloud AI, as an accountant sees it: connected or not, and whether
+   * scans may be read in the cloud. Never a key, a model or an endpoint.
+   */
+  type WheatCloudStatus = {
+    connected: boolean;
+    providers: string[];
+    authorizationProvider: string;
+    canAuthorize: boolean;
+    secureStorageAvailable: boolean;
+    documentOcrEnabled: boolean;
+    consentGiven: boolean;
+    localRecognitionAvailable: boolean;
   };
 
   type WheatAiProviderStatus = {

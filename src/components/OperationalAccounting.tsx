@@ -609,6 +609,12 @@ type CounterpartyDraft = {
   legalName: string;
   ice: string;
   taxId: string;
+  rc: string;
+  patente: string;
+  cnss: string;
+  rib: string;
+  vatLiable: boolean;
+  exonerationReason: string;
   email: string;
   phone: string;
   address: string;
@@ -624,6 +630,12 @@ const newCounterpartyDraft = (): CounterpartyDraft => ({
   legalName: "",
   ice: "",
   taxId: "",
+  rc: "",
+  patente: "",
+  cnss: "",
+  rib: "",
+  vatLiable: true,
+  exonerationReason: "",
   email: "",
   phone: "",
   address: "",
@@ -1079,6 +1091,12 @@ export function OperationalAccounting({
       legalName: String(counterparty.legalName ?? ""),
       ice: String(counterparty.ice ?? ""),
       taxId: String(counterparty.taxId ?? ""),
+      rc: String(counterparty.rc ?? ""),
+      patente: String(counterparty.patente ?? ""),
+      cnss: String(counterparty.cnss ?? ""),
+      rib: String(counterparty.rib ?? ""),
+      vatLiable: counterparty.vatLiable !== false,
+      exonerationReason: String(counterparty.exonerationReason ?? ""),
       email: String(counterparty.email ?? ""),
       phone: String(counterparty.phone ?? ""),
       address: String(counterparty.address ?? ""),
@@ -1625,6 +1643,12 @@ export function OperationalAccounting({
                 <label className="op-field"><span>Raison sociale <em>facultatif</em></span><input value={counterpartyDraft.legalName} onChange={(event) => setCounterpartyDraft((current) => ({ ...current, legalName: event.target.value }))} /></label>
                 <label className="op-field"><span>ICE</span><input value={counterpartyDraft.ice} onChange={(event) => setCounterpartyDraft((current) => ({ ...current, ice: event.target.value }))} /></label>
                 <label className="op-field"><span>Identifiant fiscal</span><input value={counterpartyDraft.taxId} onChange={(event) => setCounterpartyDraft((current) => ({ ...current, taxId: event.target.value }))} /></label>
+                <label className="op-field"><span>Registre de commerce <em>facultatif</em></span><input value={counterpartyDraft.rc} onChange={(event) => setCounterpartyDraft((current) => ({ ...current, rc: event.target.value }))} /></label>
+                <label className="op-field"><span>Patente <em>facultatif</em></span><input value={counterpartyDraft.patente} onChange={(event) => setCounterpartyDraft((current) => ({ ...current, patente: event.target.value }))} /></label>
+                <label className="op-field"><span>Numéro CNSS <em>facultatif</em></span><input value={counterpartyDraft.cnss} onChange={(event) => setCounterpartyDraft((current) => ({ ...current, cnss: event.target.value }))} /></label>
+                <label className="op-field"><span>RIB <em>facultatif</em></span><input value={counterpartyDraft.rib} onChange={(event) => setCounterpartyDraft((current) => ({ ...current, rib: event.target.value }))} /></label>
+                <label className="op-field op-field--check"><input type="checkbox" checked={counterpartyDraft.vatLiable} onChange={(event) => setCounterpartyDraft((current) => ({ ...current, vatLiable: event.target.checked }))} /><span>Assujetti à la TVA</span></label>
+                {!counterpartyDraft.vatLiable && <label className="op-field op-field--wide"><span>Motif d'exonération</span><input value={counterpartyDraft.exonerationReason} onChange={(event) => setCounterpartyDraft((current) => ({ ...current, exonerationReason: event.target.value }))} placeholder="Référence légale de l'exonération" /></label>}
                 <label className="op-field"><span>E-mail</span><input type="email" value={counterpartyDraft.email} onChange={(event) => setCounterpartyDraft((current) => ({ ...current, email: event.target.value }))} /></label>
                 <label className="op-field"><span>Téléphone</span><input type="tel" value={counterpartyDraft.phone} onChange={(event) => setCounterpartyDraft((current) => ({ ...current, phone: event.target.value }))} /></label>
                 <label className="op-field op-field--wide"><span>Adresse</span><input value={counterpartyDraft.address} onChange={(event) => setCounterpartyDraft((current) => ({ ...current, address: event.target.value }))} /></label>

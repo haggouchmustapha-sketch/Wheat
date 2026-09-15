@@ -4,6 +4,7 @@ import { HttpsUpdateProvider } from "./httpsProvider";
 import { LocalUpdateProvider } from "./localProvider";
 import { WHEAT_RELEASE_REPOSITORY, parseGitHubRepository } from "./releaseSource";
 import { resolveUpdatePublicKey } from "./signature";
+import type { FetchLike } from "./releaseTransport";
 import type { UpdateProvider } from "./types";
 
 /**
@@ -96,19 +97,30 @@ export function resolveUpdateChannel(options: {
   isPackaged: boolean;
   localDirectory: string;
   env?: NodeJS.ProcessEnv;
+  /**
+   * How the online providers reach the network. The main process supplies
+   * Chromium's stack, so finding and downloading an update uses this computer's
+   * certificate store and proxy — an office gateway or antivirus that inspects
+   * TLS otherwise makes every update attempt fail on a certificate only Windows
+   * trusts. It changes what Wheat can *reach*, never what it accepts: the
+   * manifest signature and the artifact's SHA-256 are verified exactly as
+   * before, whatever delivered the bytes.
+   */
+  fetchImpl?: FetchLike;
 }): ResolvedUpdateChannel {
   const publicKey = resolveUpdatePublicKey({ isPackaged: options.isPackaged, env: options.env });
   const source = resolveUpdateSource(options);
   const unsignedChannel = publicKey
     ? undefined
     : "An online update channel is configured but no release signing key is compiled in; updates cannot be verified and will be refused.";
+  const transport = options.fetchImpl ? { fetchImpl: options.fetchImpl } : {};
 
   try {
     if (source.kind === "github") {
-      return { provider: new GitHubReleasesUpdateProvider(source), publicKey, source, misconfiguration: unsignedChannel };
+      return { provider: new GitHubReleasesUpdateProvider(source, transport), publicKey, source, misconfiguration: unsignedChannel };
     }
     if (source.kind === "https") {
-      return { provider: new HttpsUpdateProvider(source.feedUrl), publicKey, source, misconfiguration: unsignedChannel };
+      return { provider: new HttpsUpdateProvider(source.feedUrl, transport), publicKey, source, misconfiguration: unsignedChannel };
     }
     return { provider: new LocalUpdateProvider(source.directory), publicKey, source };
   } catch (error) {

@@ -3,8 +3,9 @@
 Wheat is a Windows-first, local-first Electron accounting app for Moroccan small businesses and fiduciaires.
 
 **Stack:** Electron + React 19 + TypeScript + Vite + Prisma/SQLite.  
-**User data:** `%APPDATA%\Wheat\`  
-**Renderer bridge:** `window.wheat` only.
+**User data:** `%APPDATA%\Wheat\` (shared by both editions)  
+**Renderer bridge:** `window.wheat` only.  
+**Editions:** Standard and Lightweight, one source tree — see `docs/wheat-editions.md`.
 
 ## Core rules
 
@@ -16,6 +17,16 @@ Wheat is a Windows-first, local-first Electron accounting app for Moroccan small
 - Preserve dossier isolation, period locks, double-entry balance, and existing domain validation.
 - Use `src/styles/tokens.css` for design tokens instead of ad-hoc styling where practical.
 - Never edit generated Prisma client files.
+
+## Editions
+
+Wheat builds as two editions from one source tree: **Standard** (local recognition packaged) and **Lightweight** (cloud recognition, much smaller installer). `src/wheatEdition.ts` is the single source of truth and the value is compiled in by `vite.config.ts`; read `docs/wheat-editions.md` before touching anything edition-related.
+
+- The edition selects **execution strategy, packaging and presentation**. It must never affect accounting: no posting, balance, VAT, journal, report, period-lock or schema behaviour may depend on it. `tests/wheat-edition-unit.spec.cjs` and `tests/wheat-edition-accounting-parity.spec.cjs` enforce this.
+- Ask `WHEAT_EDITION_PROFILE` a capability question (`hasBundledLocalOcr`, `visualProfile`, `resource.*`) rather than comparing edition strings.
+- Visual differences belong in the `:root[data-wheat-edition="lightweight"]` token block, not in components. `prefers-reduced-motion` must keep winning over the edition.
+- Both editions share `appId`, `productName`, the install directory and `%APPDATA%\Wheat\`. Do not give an edition its own profile, identity or schema.
+- Wheat ships **no** provider API key, anywhere. Cloud usage is the user's own account via the provider's PKCE flow (`electron/cloudAuthorization.ts`).
 
 ## Before changing a subsystem
 
@@ -57,6 +68,8 @@ Do **not** publish, tag, bump a version, or create a release unless explicitly a
 
 For updater/release work, read `docs/wheat-release-process.md` and the existing `electron/updater/` implementation before changing anything.
 
+A release publishes **both** editions from one commit, with one version. The updater must never cross editions; `electron/updater/edition.ts` decides which artifact this build installs.
+
 Non-negotiable updater rules:
 - User data in `%APPDATA%\Wheat\` must never be replaced or reset by an update.
 - Never add `prisma migrate reset` or database recreation to update paths.
@@ -83,6 +96,11 @@ npm run db:seed
 npm run test:desktop
 npm run test:ocr
 npm run test:updater
+
+npm run build:standard
+npm run build:lightweight
+npm run dist:standard
+npm run dist:lightweight
 
 npm run installer
 npm run portable

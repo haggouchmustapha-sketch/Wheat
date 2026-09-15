@@ -53,7 +53,7 @@ function fixtureRepository(version = "9.9.9") {
   for (const file of ["release-publish.mjs", "release-prepare.mjs"]) {
     fs.copyFileSync(path.join(root, "scripts", file), path.join(directory, "scripts", file));
   }
-  for (const file of ["releaseManifest.mjs", "releaseRepository.mjs"]) {
+  for (const file of ["releaseManifest.mjs", "releaseRepository.mjs", "wheatEditions.mjs"]) {
     fs.copyFileSync(path.join(root, "scripts", "lib", file), path.join(directory, "scripts", "lib", file));
   }
   fs.mkdirSync(path.join(directory, "electron", "updater"), { recursive: true });
@@ -94,21 +94,37 @@ function keyPair() {
 }
 
 /** Writes a plan that would publish, so each test can spoil exactly one thing. */
-async function preparePlan(fixture, { sign = true, testsSkipped = false, key } = {}) {
+/**
+ * A prepared release, as `release:prepare` actually produces one: **both**
+ * editions, one version, one signed manifest carrying a signed editions map.
+ *
+ * `editions.lightweight` can be dropped by a caller to rehearse the half-
+ * published release the publish gate exists to refuse.
+ */
+async function preparePlan(fixture, { sign = true, testsSkipped = false, key, editions = ["standard", "lightweight"] } = {}) {
   fs.mkdirSync(fixture.releaseDirectory, { recursive: true });
-  const installerPath = path.join(fixture.releaseDirectory, `WheatSetup-${fixture.version}.exe`);
-  fs.writeFileSync(installerPath, Buffer.from(`fake NSIS installer for ${fixture.version}`));
+  const editionArtifacts = editions.map((edition) => {
+    const name = edition === "standard" ? "Standard" : "Lightweight";
+    const target = path.join(fixture.releaseDirectory, `Wheat-${name}-${fixture.version}-Setup.exe`);
+    fs.writeFileSync(target, Buffer.from(`fake ${edition} NSIS installer for ${fixture.version}`));
+    return { edition, path: target };
+  });
+  // The top-level manifest fields describe Standard, for every Wheat released
+  // before editions existed.
+  const installerPath = editionArtifacts.find((entry) => entry.edition === "standard").path;
 
   const manifest = await releaseManifest.buildReleaseManifest({
     version: fixture.version,
     artifactPath: installerPath,
     notes: ["Import bancaire amélioré", "Corrections de stabilité"],
     layout: "flat",
+    editionArtifacts,
   });
   if (sign) {
     const keyPath = path.join(fixture.directory, "key.pem");
     fs.writeFileSync(keyPath, key.privatePem);
     manifest.signature = { algorithm: "ed25519", value: releaseManifest.signRelease(manifest, keyPath) };
+    manifest.editionsSignature = { algorithm: "ed25519", value: releaseManifest.signEditions(manifest, keyPath) };
   }
   const manifestPath = path.join(fixture.releaseDirectory, "latest.json");
   fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
@@ -126,9 +142,20 @@ async function preparePlan(fixture, { sign = true, testsSkipped = false, key } =
     testsRun: testsSkipped ? [] : ["lint", "test:updater"],
     testsSkipped,
     source: { isRepository: true, commit: fixture.commit, branch: "main", clean: true },
+    editions: Object.fromEntries(editionArtifacts.map((entry) => [entry.edition, {
+      artifact: path.basename(entry.path),
+      sha256: manifest.editions[entry.edition].sha256,
+      bytes: manifest.editions[entry.edition].artifactSize,
+    }])),
     assets: [
-      { name: path.basename(installerPath), path: relative(installerPath), sha256: manifest.sha256, bytes: fs.statSync(installerPath).size, purpose: "installer" },
       { name: "latest.json", path: relative(manifestPath), sha256: await releaseManifest.hashFile(manifestPath), bytes: fs.statSync(manifestPath).size, purpose: "manifest" },
+      ...await Promise.all(editionArtifacts.map(async (entry) => ({
+        name: path.basename(entry.path),
+        path: relative(entry.path),
+        sha256: manifest.editions[entry.edition].sha256,
+        bytes: fs.statSync(entry.path).size,
+        purpose: `${entry.edition} installer`,
+      }))),
     ],
   };
   // Commit the source as it stands, exactly as an operator does before building:
@@ -420,6 +447,48 @@ test("publishing refuses a plan prepared for a different version or repository",
   } finally { fs.rmSync(fixture.directory, { recursive: true, force: true }); }
 });
 
+test("publishing refuses a release that does not publish both editions", async () => {
+  const fixture = fixtureRepository();
+  try {
+    const key = keyPair();
+    compileKeyInto(fixture, key.publicPem);
+    // A release built for Standard alone. Every digest matches and the manifest
+    // signature verifies — and it is still refused, because half the installed
+    // base would have nothing to update to.
+    await preparePlan(fixture, { key, editions: ["standard"] });
+    const result = runPublish(fixture);
+    expect(result.ok).toBe(false);
+    expect(result.output).toMatch(/names no installer for the lightweight edition/i);
+    expect(result.output).not.toMatch(/^Published Wheat/m);
+  } finally { fs.rmSync(fixture.directory, { recursive: true, force: true }); }
+});
+
+test("publishing refuses a release whose editions map is unsigned", async () => {
+  const fixture = fixtureRepository();
+  try {
+    const key = keyPair();
+    compileKeyInto(fixture, key.publicPem);
+    const prepared = await preparePlan(fixture, { key });
+    const manifestPath = path.join(fixture.releaseDirectory, "latest.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    // Stripping a signature is the cheapest possible forgery, so its absence
+    // must never read as "nothing to check".
+    delete manifest.editionsSignature;
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    const plan = JSON.parse(fs.readFileSync(prepared.planPath, "utf8"));
+    for (const asset of plan.assets) {
+      if (asset.name !== "latest.json") continue;
+      asset.sha256 = await releaseManifest.hashFile(manifestPath);
+      asset.bytes = fs.statSync(manifestPath).size;
+    }
+    fs.writeFileSync(prepared.planPath, JSON.stringify(plan, null, 2));
+
+    const result = runPublish(fixture);
+    expect(result.ok).toBe(false);
+    expect(result.output).toMatch(/per-edition installers are unsigned/i);
+  } finally { fs.rmSync(fixture.directory, { recursive: true, force: true }); }
+});
+
 test("a well-formed plan passes every local gate and still publishes nothing", async () => {
   const fixture = fixtureRepository();
   try {
@@ -434,6 +503,9 @@ test("a well-formed plan passes every local gate and still publishes nothing", a
     const result = runPublish(fixture);
     expect(result.output).toMatch(/sha256 ok/);
     expect(result.output).toMatch(/Signature verifies against the key compiled into Wheat/);
+    // Both editions signed and matched to their own prepared installer.
+    expect(result.output).toMatch(/standard\s+Wheat-Standard-9\.9\.9-Setup\.exe\s+signed and matched/);
+    expect(result.output).toMatch(/lightweight\s+Wheat-Lightweight-9\.9\.9-Setup\.exe\s+signed and matched/);
     expect(result.ok).toBe(false);
     expect(result.output).toMatch(/GitHub CLI|gh auth login|not installed|Could not resolve|not found|gh release list failed|HTTP 404/i);
     expect(result.output).not.toMatch(/^Published Wheat/m);

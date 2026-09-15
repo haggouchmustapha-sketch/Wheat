@@ -40,7 +40,30 @@ export function canonicalReleasePayload(metadata) {
   ]);
 }
 
-export function signRelease(metadata, keyPath) {
+/**
+ * The exact bytes an editions signature covers.
+ *
+ * Must stay byte-identical to `canonicalEditionsPayload` in
+ * electron/updater/signature.ts. Bound to the release version so a signed
+ * editions map cannot be lifted onto a different release, and emitted in sorted
+ * edition order so signer and verifier cannot disagree about ordering.
+ */
+export function canonicalEditionsPayload(metadata) {
+  const editions = metadata.editions ?? {};
+  return JSON.stringify([
+    "wheat-editions",
+    1,
+    metadata.version,
+    Object.keys(editions).sort().map((edition) => [
+      edition,
+      editions[edition].artifact.replaceAll("\\", "/"),
+      editions[edition].sha256.toLowerCase(),
+      editions[edition].artifactSize ?? null,
+    ]),
+  ]);
+}
+
+function readSigningKey(keyPath) {
   let key;
   try {
     key = createPrivateKey(fs.readFileSync(keyPath, "utf8"));
@@ -48,8 +71,18 @@ export function signRelease(metadata, keyPath) {
     throw new Error(`Could not read the release signing key at ${keyPath}: ${error.message}`);
   }
   if (key.asymmetricKeyType !== "ed25519") throw new Error("The release signing key must be an Ed25519 private key.");
+  return key;
+}
+
+/** Signs the per-edition installer map, alongside `signRelease`. */
+export function signEditions(metadata, keyPath) {
+  if (!metadata.editions) throw new Error("This release publishes no per-edition installers to sign.");
+  return signPayload(null, Buffer.from(canonicalEditionsPayload(metadata), "utf8"), readSigningKey(keyPath)).toString("base64");
+}
+
+export function signRelease(metadata, keyPath) {
   // Ed25519 signs the message directly, hence the null digest algorithm.
-  return signPayload(null, Buffer.from(canonicalReleasePayload(metadata), "utf8"), key).toString("base64");
+  return signPayload(null, Buffer.from(canonicalReleasePayload(metadata), "utf8"), readSigningKey(keyPath)).toString("base64");
 }
 
 export async function hashFile(filePath) {
@@ -115,27 +148,56 @@ export function assertNotesAreUsable(notes) {
  * resolves the relative path for a folder — but the two must be generated
  * deliberately rather than by accident, because the value is signed.
  */
-export async function buildReleaseManifest({ version, artifactPath, notes, minimumVersion, layout = "flat", releaseDate }) {
+export async function buildReleaseManifest({ version, artifactPath, notes, minimumVersion, layout = "flat", releaseDate, editionArtifacts }) {
   if (!semver.valid(version)) throw new Error(`Release version must be valid SemVer; received ${version}.`);
   assertNotesAreUsable(notes);
   if (minimumVersion && !semver.valid(minimumVersion)) throw new Error("minimumVersion must be valid SemVer.");
   if (minimumVersion && semver.gt(minimumVersion, version)) throw new Error("minimumVersion cannot be newer than this release.");
-  if (!fs.existsSync(artifactPath) || !fs.statSync(artifactPath).isFile()) {
-    throw new Error(`Built installer not found at ${artifactPath}.`);
-  }
-  if (path.extname(artifactPath).toLowerCase() !== ".exe") throw new Error("The Windows update artifact must be an NSIS .exe installer.");
+  assertBuiltInstaller(artifactPath);
 
   const artifactName = path.basename(artifactPath);
-  return {
+  const locate = (name) => (layout === "flat" ? name : `${version}/${name}`);
+
+  /**
+   * `artifact`/`sha256` stay the **Standard** installer.
+   *
+   * Every Wheat released before editions existed reads only those two fields,
+   * and those installations must keep updating — to Standard, which is what
+   * they are. The editions map below is additive: a build that understands it
+   * picks its own installer out of it, a build that does not never sees it.
+   */
+  const manifest = {
     schemaVersion: UPDATE_SCHEMA_VERSION,
     version,
     releaseDate: releaseDate ?? new Date().toISOString().slice(0, 10),
     notes,
-    artifact: layout === "flat" ? artifactName : `${version}/${artifactName}`,
+    artifact: locate(artifactName),
     sha256: await hashFile(artifactPath),
     artifactSize: fs.statSync(artifactPath).size,
     ...(minimumVersion ? { minimumVersion } : {}),
   };
+
+  if (editionArtifacts?.length) {
+    const editions = {};
+    for (const entry of editionArtifacts) {
+      assertBuiltInstaller(entry.path);
+      editions[entry.edition] = {
+        artifact: locate(path.basename(entry.path)),
+        sha256: await hashFile(entry.path),
+        artifactSize: fs.statSync(entry.path).size,
+      };
+    }
+    manifest.editions = editions;
+  }
+
+  return manifest;
+}
+
+function assertBuiltInstaller(artifactPath) {
+  if (!artifactPath || !fs.existsSync(artifactPath) || !fs.statSync(artifactPath).isFile()) {
+    throw new Error(`Built installer not found at ${artifactPath}.`);
+  }
+  if (path.extname(artifactPath).toLowerCase() !== ".exe") throw new Error("The Windows update artifact must be an NSIS .exe installer.");
 }
 
 export function releaseTagFor(version) {

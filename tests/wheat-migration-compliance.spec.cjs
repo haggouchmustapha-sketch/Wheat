@@ -191,7 +191,11 @@ test("the 1.4 migration stays embedded while the runtime reports the current sch
   expect(packageJson.atlasVersion).toBeUndefined();
   expect(packageJson.build.buildNumber).toBeUndefined();
   expect(packageJson.build.buildVersion).toBeUndefined();
-  expect(packageJson.build.artifactName).toBe("WheatSetup-${version}.${ext}");
+  // The base artifact name is Standard's; `scripts/package-edition.mjs`
+  // substitutes the edition's own for each package. Both carry the same
+  // `${version}`, because the edition is separate metadata and never a
+  // separate version number.
+  expect(packageJson.build.artifactName).toBe("Wheat-Standard-${version}-Setup.exe");
   expect(packageJson.build.directories.output).toBe("release/${version}");
   expect(fs.readFileSync(path.join(root, "src", "appVersion.ts"), "utf8")).toContain("packageMetadata.version");
   const packageLock = JSON.parse(fs.readFileSync(path.join(root, "package-lock.json"), "utf8"));

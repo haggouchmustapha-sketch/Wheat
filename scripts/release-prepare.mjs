@@ -7,10 +7,13 @@ import {
   buildReleaseManifest,
   canonicalReleasePayload,
   hashFile,
+  canonicalEditionsPayload,
   readReleaseNotes,
   releaseTagFor,
+  signEditions,
   signRelease,
 } from "./lib/releaseManifest.mjs";
+import { WHEAT_EDITIONS, editionArtifactPaths } from "./lib/wheatEditions.mjs";
 import { RELEASE_BRANCH, ghIsAuthenticated, ghJson, readPackageMetadata, readSourceProvenance, remoteBranchHead, repositoryRoot, resolveReleaseRepository } from "./lib/releaseRepository.mjs";
 import { createPublicKey, verify } from "node:crypto";
 
@@ -173,17 +176,26 @@ if (flags.has("--skip-tests")) {
   }
 }
 
-// ------------------------------------------------- 6. build the real installer
-step("Production package");
+// ------------------------------------------------ 6. build the real installers
+//
+// One source revision, both editions, one version. They are built in sequence
+// from this working tree so a release can never contain a Standard installer
+// from one commit and a Lightweight installer from another.
+step("Production packages");
 const releaseDirectory = path.join(root, "release", version);
-const artifactPath = path.join(releaseDirectory, `WheatSetup-${version}.exe`);
+const editionArtifacts = editionArtifactPaths(root, version);
 if (flags.has("--skip-build")) {
-  console.log("  SKIPPED (--skip-build); reusing the existing installer.");
+  console.log("  SKIPPED (--skip-build); reusing the existing installers.");
 } else {
-  runNpmScript("installer");
+  for (const edition of WHEAT_EDITIONS) runNpmScript(`dist:${edition}`);
 }
-if (!fs.existsSync(artifactPath)) throw new Error(`The installer was not produced at ${artifactPath}.`);
-console.log(`  ${path.relative(root, artifactPath)} (${(fs.statSync(artifactPath).size / (1024 * 1024)).toFixed(1)} MB)`);
+for (const entry of editionArtifacts) {
+  if (!fs.existsSync(entry.path)) throw new Error(`The ${entry.edition} installer was not produced at ${entry.path}.`);
+  console.log(`  ${entry.edition.padEnd(12)} ${path.relative(root, entry.path)} (${(fs.statSync(entry.path).size / (1024 * 1024)).toFixed(1)} MB)`);
+}
+// The top-level manifest fields describe Standard, because that is what every
+// Wheat released before editions existed will read and install.
+const artifactPath = editionArtifacts.find((entry) => entry.edition === "standard").path;
 
 // --------------------------------------------------------------- 7. manifest
 step("Update metadata");
@@ -195,10 +207,17 @@ const manifest = await buildReleaseManifest({
   // A GitHub release is a flat set of assets, so the manifest names the file
   // and Wheat builds the URL around it from the repository and the tag.
   layout: "flat",
+  editionArtifacts,
 });
 const signingKeyPath = values.get("--sign");
 if (signingKeyPath) {
-  manifest.signature = { algorithm: "ed25519", value: signRelease(manifest, path.resolve(root, signingKeyPath)) };
+  const keyPath = path.resolve(root, signingKeyPath);
+  manifest.signature = { algorithm: "ed25519", value: signRelease(manifest, keyPath) };
+  // The editions map decides which bytes a Lightweight install downloads, so it
+  // is signed too - under its own payload, because the payload the existing
+  // signature covers is already deployed and cannot change without every
+  // installed Wheat rejecting every future release.
+  manifest.editionsSignature = { algorithm: "ed25519", value: signEditions(manifest, keyPath) };
 } else {
   console.log("  WARNING: unsigned. Every installed Wheat will refuse this release. Pass --sign <key.pem>.");
 }
@@ -211,7 +230,13 @@ console.log(`  ${path.relative(root, manifestPath)}`);
 step("Verification");
 const rehashed = await hashFile(artifactPath);
 if (rehashed !== manifest.sha256) throw new Error("The installer changed while the manifest was being written.");
-console.log("  Installer digest matches the manifest.");
+for (const entry of editionArtifacts) {
+  const digest = await hashFile(entry.path);
+  if (digest !== manifest.editions[entry.edition].sha256) {
+    throw new Error(`The ${entry.edition} installer changed while the manifest was being written.`);
+  }
+}
+console.log(`  Installer digests match the manifest (${editionArtifacts.length} editions).`);
 
 if (manifest.signature) {
   // Verified against the key compiled into *this* build, which is the key every
@@ -221,31 +246,75 @@ if (manifest.signature) {
   if (!compiledKey) {
     console.log("  WARNING: no WHEAT_UPDATE_PUBLIC_KEY is compiled into this build; the signature could not be checked against what clients hold.");
   } else {
-    const payload = Buffer.from(canonicalReleasePayload(manifest), "utf8");
-    const ok = verify(null, payload, createPublicKey(compiledKey), Buffer.from(manifest.signature.value, "base64"));
+    const key = createPublicKey(compiledKey);
+    const ok = verify(null, Buffer.from(canonicalReleasePayload(manifest), "utf8"), key, Buffer.from(manifest.signature.value, "base64"));
     if (!ok) {
       throw new Error(
         "The manifest signature does not verify against the public key compiled into Wheat. " +
-        "The signing key does not match WHEAT_UPDATE_PUBLIC_KEY in electron/updater/signature.ts — publishing this would ship an update every client refuses.",
+        "The signing key does not match WHEAT_UPDATE_PUBLIC_KEY in electron/updater/signature.ts \u2014 publishing this would ship an update every client refuses.",
       );
     }
-    console.log("  Signature verifies against the key compiled into Wheat.");
+    const editionsOk = verify(null, Buffer.from(canonicalEditionsPayload(manifest), "utf8"), key, Buffer.from(manifest.editionsSignature.value, "base64"));
+    if (!editionsOk) {
+      throw new Error("The editions signature does not verify against the public key compiled into Wheat.");
+    }
+    console.log("  Signatures verify against the key compiled into Wheat (release + editions).");
   }
 }
 
-const blockmapPath = `${artifactPath}.blockmap`;
 const assets = [
-  { name: path.basename(artifactPath), path: artifactPath, sha256: manifest.sha256, purpose: "The NSIS installer Wheat downloads and runs." },
   { name: RELEASE_MANIFEST_ASSET, path: manifestPath, sha256: await hashFile(manifestPath), purpose: "The signed manifest an installed Wheat reads first." },
 ];
-if (fs.existsSync(blockmapPath)) {
+for (const entry of editionArtifacts) {
   assets.push({
-    name: path.basename(blockmapPath),
-    path: blockmapPath,
-    sha256: await hashFile(blockmapPath),
-    purpose: "electron-builder's block map. Not read by Wheat's updater; published so the installer can be diffed and verified externally.",
+    name: path.basename(entry.path),
+    path: entry.path,
+    sha256: manifest.editions[entry.edition].sha256,
+    purpose: `The NSIS installer for Wheat ${entry.edition === "standard" ? "Standard" : "Lightweight"}.`,
   });
+  const blockmapPath = `${entry.path}.blockmap`;
+  if (fs.existsSync(blockmapPath)) {
+    assets.push({
+      name: path.basename(blockmapPath),
+      path: blockmapPath,
+      sha256: await hashFile(blockmapPath),
+      purpose: "electron-builder's block map. Not read by Wheat's updater; published so the installer can be diffed and verified externally.",
+    });
+  }
 }
+
+// ------------------------------------------------- 8b. website release data
+//
+// The one file the Wheat website needs in order to offer this release. It is
+// written here, from the manifest that was just built and verified, so the
+// version, the file names, the sizes and the checksums the site publishes are
+// the ones that were actually produced — never a set of numbers somebody
+// retyped into a second place and got wrong.
+step("Website release metadata");
+const websiteRelease = {
+  schemaVersion: 1,
+  version,
+  releaseDate: manifest.releaseDate,
+  tag: releaseTagFor(version),
+  repositoryUrl: repository.url,
+  notesUrl: `${repository.url}/releases/tag/${releaseTagFor(version)}`,
+  editions: Object.fromEntries(editionArtifacts.map((entry) => {
+    const fileName = path.basename(entry.path);
+    return [entry.edition, {
+      fileName,
+      downloadUrl: `${repository.url}/releases/download/${releaseTagFor(version)}/${encodeURIComponent(fileName)}`,
+      sizeBytes: fs.statSync(entry.path).size,
+      sha256: manifest.editions[entry.edition].sha256,
+    }];
+  })),
+};
+const websiteReleasePath = path.join(releaseDirectory, "wheat-website-release.json");
+fs.writeFileSync(websiteReleasePath, `${JSON.stringify(websiteRelease, null, 2)}\n`, "utf8");
+console.log(`  ${path.relative(root, websiteReleasePath)}`);
+for (const [edition, entry] of Object.entries(websiteRelease.editions)) {
+  console.log(`    ${edition.padEnd(12)} ${(entry.sizeBytes / (1024 * 1024)).toFixed(0)} MB  ${entry.fileName}`);
+}
+console.log("  Apply it to the website with:  node sync-release.mjs <path to this file>");
 
 // -------------------------------------------------------------- 9. the plan
 step("Publication plan");
@@ -259,6 +328,11 @@ const plan = {
   notesFile: path.relative(root, resolvedNotes),
   notes,
   signed: Boolean(manifest.signature),
+  editions: Object.fromEntries(editionArtifacts.map((entry) => [entry.edition, {
+    artifact: path.basename(entry.path),
+    sha256: manifest.editions[entry.edition].sha256,
+    bytes: manifest.editions[entry.edition].artifactSize,
+  }])),
   testsRun,
   testsSkipped: flags.has("--skip-tests"),
   buildSkipped: flags.has("--skip-build"),
@@ -283,6 +357,7 @@ console.log("  Assets that WOULD be uploaded:");
 for (const asset of plan.assets) console.log(`    ${asset.name}  ${(asset.bytes / (1024 * 1024)).toFixed(1)} MB  sha256=${asset.sha256.slice(0, 16)}…`);
 if (!plan.signed) console.log("\n  This release is UNSIGNED and release:publish will refuse it.");
 if (plan.testsSkipped) console.log("\n  Tests were skipped and release:publish will refuse this plan.");
+console.log(`  Website      node sync-release.mjs "${websiteReleasePath}"   (run from the wheat-website checkout, after publishing)`);
 console.log(`\nWhen you are satisfied:  npm run release:publish\n`);
 
 /** Reads WHEAT_UPDATE_PUBLIC_KEY out of the application source. */

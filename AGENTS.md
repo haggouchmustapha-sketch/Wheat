@@ -17,7 +17,22 @@ npm run db:reset            # recreate local database and load seed data
 npx playwright test tests/wheat-reconciliation-unit.spec.cjs --reporter=line
 ```
 
-Use `npm run test:desktop`, `npm run test:ocr`, or `npm run test:updater` for their focused suites. Packaging commands (`installer`, `portable`, `pack`) reset the database and build; do not use them for routine checks.
+Use `npm run test:desktop`, `npm run test:ocr`, or `npm run test:updater` for their focused suites. Packaging commands (`installer`, `portable`, `pack`, `dist:standard`, `dist:lightweight`) reset the database and build; do not use them for routine checks.
+
+## Editions
+
+Wheat builds as two editions from one source tree — **Standard** and **Lightweight** — differing only in packaging, recognition strategy, resource budgets and presentation. `src/wheatEdition.ts` is the single source of truth; `docs/wheat-editions.md` is the reference.
+
+```powershell
+npm run build:standard
+npm run build:lightweight
+npm run dist:standard
+npm run dist:lightweight
+
+cross-env WHEAT_EDITION=lightweight npx playwright test tests/wheat-reporting-unit.spec.cjs
+```
+
+The edition must never affect accounting, the schema or a dossier's contents. Ask `WHEAT_EDITION_PROFILE` a capability question rather than comparing edition strings, and put visual differences in the `:root[data-wheat-edition="lightweight"]` token block rather than in components.
 
 ## Coding Style & Naming Conventions
 

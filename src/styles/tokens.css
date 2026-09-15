@@ -177,6 +177,15 @@
   --shadow: var(--shadow-md);
   --highlight-inset: rgb(255 255 255 / 0.72);
   --sheen: rgb(255 255 255 / 0.7);
+
+  /* Backdrop blur, as a token rather than a literal at each call site.
+     Blurring a large translucent area is the single most expensive thing this
+     interface asks a GPU to do, and on an old integrated chip it is the
+     difference between a dialog that opens and a dialog that stutters. Every
+     `backdrop-filter` in Wheat resolves through one of these. */
+  --blur-scrim: 2px;
+  --blur-panel: 8px;
+  --blur-strong: 20px;
 }
 
 /* ---- 3. Semantic tokens — dark mode ("Main Dark" identity) -------------- */
@@ -376,8 +385,55 @@
   --page-gutter: var(--space-8);
 }
 
+/* ==========================================================================
+   EDITION VISUAL PROFILE
+   --------------------------------------------------------------------------
+   Wheat Standard and Wheat Lightweight are one interface. They share every
+   colour, every measurement, every control and every layout in this file; the
+   edition changes only how much work a frame costs.
+
+   `src/main.tsx` stamps the edition onto <html>, and the whole difference is
+   the token block below. It is deliberately a token override and not a set of
+   conditionals scattered through components: an accountant on an old office
+   PC should recognise Wheat instantly, and a future component should get the
+   right behaviour without its author having heard of editions.
+
+   What is reduced: decorative motion, the depth of shadows, and backdrop blur
+   over large areas. What is NOT reduced: colour, contrast, spacing, type,
+   borders, focus rings, hover and pressed feedback, loading states, or
+   anything that tells somebody what the interface is doing.
+   ========================================================================== */
+:root[data-wheat-edition="lightweight"] {
+  /* Fast enough to read as a response, short enough not to composite for
+     long. Not zero: an interface with no transition at all reads as a jump,
+     and people lose track of what changed. */
+  --duration-instant: 1ms;
+  --duration-fast: 80ms;
+  --duration-normal: 110ms;
+  --duration-slow: 140ms;
+
+  /* Shallower elevation. Depth still separates a dialog from the page; it
+     simply stops being painted as a large soft blur. */
+  --shadow-xs: 0 1px 1px rgb(var(--shadow-rgb) / 0.08);
+  --shadow-sm: 0 1px 2px rgb(var(--shadow-rgb) / 0.10);
+  --shadow-md: 0 2px 4px rgb(var(--shadow-rgb) / 0.12);
+  --shadow-lg: 0 4px 10px rgb(var(--shadow-rgb) / 0.16);
+  --shadow-xl: 0 8px 18px rgb(var(--shadow-rgb) / 0.20);
+
+  /* No backdrop blur at all. A scrim carries the same meaning — the layer
+     beneath is not the one you are using — and costs nothing. */
+  --blur-scrim: 0px;
+  --blur-panel: 0px;
+  --blur-strong: 0px;
+}
+
+/* Accessibility is independent of the edition, and wins over it.
+   The `:root[data-wheat-edition]` selector matches the edition block's
+   specificity and comes later, so a machine asking for reduced motion gets it
+   in Standard and in Lightweight alike. */
 @media (prefers-reduced-motion: reduce) {
-  :root {
+  :root,
+  :root[data-wheat-edition] {
     --duration-instant: 1ms;
     --duration-fast: 1ms;
     --duration-normal: 1ms;

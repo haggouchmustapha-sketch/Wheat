@@ -4,6 +4,8 @@ const os = require("node:os");
 const path = require("node:path");
 const { chooseOption } = require("./wheat-ui-helpers.cjs");
 
+const root = process.env.WHEAT_CWD ?? path.resolve(__dirname, "..");
+
 test("emptying the app keeps text fields, dropdowns and focus usable without a restart", async () => {
   test.setTimeout(120000);
 
@@ -178,4 +180,41 @@ test("a read racing the tail of a workspace reset waits for it instead of refusi
   } finally {
     await app.close();
   }
+});
+
+test("maintenance queued behind a running read never refuses that read", () => {
+  /*
+   * The state rule the race above depends on, stated directly.
+   *
+   * `runExclusiveMaintenance` marks itself pending and *then* waits for the
+   * operations already running to drain. So an in-flight check that treats
+   * "pending" as a reason to wait, or to refuse, is checking the wrong flag:
+   *
+   *   - refuse, and an ordinary read is told "reessayez dans un instant" for a
+   *     reset that was milliseconds from finishing and is waiting for it;
+   *   - wait, and the two hold each other until the bound expires.
+   *
+   * Only `maintenanceOperation` — maintenance actually running — is worth
+   * waiting out, and an admitted operation can never coexist with one, because
+   * admission and the pending flag are both set synchronously.
+   */
+  const source = fs.readFileSync(path.join(root, "electron", "main.ts"), "utf8");
+  const helper = source.slice(source.indexOf("function blockingMaintenance"), source.indexOf("async function runBusinessOperation"));
+  expect(helper).toMatch(/if \(maintenanceOperation\) return true;/);
+  expect(helper).toMatch(/return maintenancePending && !admittedOperation\.getStore\(\);/);
+  expect(helper).toMatch(/if \(blockingMaintenance\(\)\) await waitForMaintenanceToFinish\(\);/);
+  expect(helper).toMatch(/if \(shutdownPending \|\| blockingMaintenance\(\)\) assertNoMaintenance\(\);/);
+  // Never an unconditional wait-then-assert: that is the bug this guards.
+  expect(helper).not.toMatch(/await waitForMaintenanceToFinish\(\);\s*\n\s*assertNoMaintenance\(\);/);
+
+  // "Admitted" has to mean something: the gate must actually mark the region,
+  // or the predicate above silently degrades to "always blocking".
+  expect(source).toMatch(/return await admittedOperation\.run\(true, \(\) => operation\(\)\);/);
+
+  // And the local lock, which reads the database from the middle of handlers
+  // that have already awaited, uses the in-flight check rather than a bare
+  // assertion. That bare assertion is what refused the racing read.
+  const localSecurityRegistration = source.slice(source.indexOf("localSecurity = registerLocalSecurityIpc"), source.indexOf("const updaterStateDirectory"));
+  expect(localSecurityRegistration).toMatch(/await awaitMaintenanceThenAssert\(\)/);
+  expect(localSecurityRegistration).not.toMatch(/\)\s*assertNoMaintenance\(\);/);
 });

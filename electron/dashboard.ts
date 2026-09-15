@@ -15,6 +15,32 @@ function absolute(value: bigint) {
   return value < 0n ? -value : value;
 }
 
+const SETTLED_INVOICE_STATUS = new Set(["PAID", "PAID_LATE", "OVERPAID", "VOIDED"]);
+
+/**
+ * What an issued invoice still owes, and whether that is late.
+ *
+ * Shared by the single-dossier dashboard and the portfolio overview so the two
+ * can never disagree about whether a client owes money: an invoice is settled
+ * by payment allocations and by credit notes raised against it, and a status
+ * that already says settled wins over the arithmetic.
+ */
+export function invoiceSettlement(
+  invoice: { id: string; status?: string | null; ttcCents: bigint | string | number; dueDate?: Date | string | null },
+  allocatedCents: bigint,
+  creditedCents: bigint,
+  asOfDay: number,
+) {
+  const total = BigInt(invoice.ttcCents ?? 0);
+  const allocated = allocatedCents + creditedCents;
+  const calculated = total > allocated ? total - allocated : 0n;
+  const balanceCents = SETTLED_INVOICE_STATUS.has(String(invoice.status ?? "")) ? 0n : calculated;
+  if (balanceCents === 0n || !invoice.dueDate) return { balanceCents, overdue: false };
+  const due = new Date(invoice.dueDate);
+  const dueDay = Date.UTC(due.getUTCFullYear(), due.getUTCMonth(), due.getUTCDate());
+  return { balanceCents, overdue: !Number.isNaN(dueDay) && dueDay < asOfDay };
+}
+
 /** Builds complete, cent-exact dashboard totals without relying on capped bootstrap rows. */
 export async function buildDashboardMetrics(prisma: any, companyId?: string, asOf = new Date()) {
   if (!companyId) return { ...ZERO_METRICS };
@@ -75,18 +101,16 @@ export async function buildDashboardMetrics(prisma: any, companyId?: string, asO
   let unpaidCount = 0;
   let overdueCount = 0;
   for (const invoice of invoices) {
-    const settledStatus = new Set(["PAID", "PAID_LATE", "OVERPAID", "VOIDED"]);
-    const allocated = (allocatedByInvoice.get(invoice.id) ?? 0n) + (creditedByInvoice.get(invoice.id) ?? 0n);
-    const total = BigInt(invoice.ttcCents ?? 0);
-    const calculatedBalance = total > allocated ? total - allocated : 0n;
-    const balance = settledStatus.has(invoice.status) ? 0n : calculatedBalance;
-    if (balance === 0n) continue;
-    unpaidTotalCents += balance;
+    const { balanceCents, overdue } = invoiceSettlement(
+      invoice,
+      allocatedByInvoice.get(invoice.id) ?? 0n,
+      creditedByInvoice.get(invoice.id) ?? 0n,
+      asOfDay,
+    );
+    if (balanceCents === 0n) continue;
+    unpaidTotalCents += balanceCents;
     unpaidCount += 1;
-    if (!invoice.dueDate) continue;
-    const due = new Date(invoice.dueDate);
-    const dueDay = Date.UTC(due.getUTCFullYear(), due.getUTCMonth(), due.getUTCDate());
-    if (!Number.isNaN(dueDay) && dueDay < asOfDay) overdueCount += 1;
+    if (overdue) overdueCount += 1;
   }
 
   return {

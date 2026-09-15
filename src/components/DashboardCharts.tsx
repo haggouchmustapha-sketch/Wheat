@@ -1,11 +1,23 @@
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 import { money } from "../lib/format";
+import { WHEAT_EDITION_PROFILE } from "../wheatEdition";
+
+/**
+ * Whether the chart animates itself into place.
+ *
+ * A pie transition is a sequence of re-layouts and repaints of an SVG that the
+ * figures beside it already state exactly. Wheat Lightweight draws the chart
+ * once; the operating system's reduced-motion setting does the same, in either
+ * edition, because that decision belongs to the person and not to the build.
+ */
+const chartAnimation = WHEAT_EDITION_PROFILE.visualProfile === "full"
+  && !(typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches);
 
 export function VatChart({ data }: { data: Array<{ name: string; value: number; color: string }> }) {
   return (
     <ResponsiveContainer width="99%" height={210} maxHeight={210}>
       <PieChart>
-        <Pie data={data} innerRadius={58} outerRadius={86} paddingAngle={2} dataKey="value">
+        <Pie data={data} innerRadius={58} outerRadius={86} paddingAngle={2} dataKey="value" isAnimationActive={chartAnimation}>
           {data.map((item) => <Cell key={item.name} fill={item.color} />)}
         </Pie>
         <Tooltip formatter={(value: unknown) => money(Number(value ?? 0))} />

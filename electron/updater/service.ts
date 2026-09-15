@@ -12,6 +12,8 @@ import { assertUpdateCompatibility } from "./validation";
 import { UpdateStateStore } from "./state";
 import { UpdateLogger } from "./logger";
 import { verifyReleaseSignature } from "./signature";
+import { projectReleaseForEdition } from "./edition";
+import { WHEAT_EDITION, type WheatEdition } from "../../src/wheatEdition";
 
 export type UpdateServiceOptions = {
   currentVersion: string;
@@ -23,6 +25,11 @@ export type UpdateServiceOptions = {
    * which a provider that requires signatures treats as a refusal to proceed.
    */
   publicKey?: string | null;
+  /**
+   * Which edition this installation is. Defaults to the edition compiled into
+   * the build; injectable so the tests can drive both without two builds.
+   */
+  edition?: WheatEdition;
   onStatus?: (status: UpdateStatus) => void;
 };
 
@@ -57,6 +64,23 @@ export class UpdateService {
 
   async getStatus() {
     return (await this.store.read()).status;
+  }
+
+  /**
+   * The release as *this* edition must act on it.
+   *
+   * Applied at every point the artifact is actually used — the check, so an
+   * update that has no installer for this edition is never offered, and the
+   * download, because the state file has sat in the profile in between. The
+   * stored release stays the manifest as published, so its own signature keeps
+   * verifying against the bytes that were signed.
+   */
+  private projectRelease(release: UpdateRelease) {
+    return projectReleaseForEdition(release, {
+      edition: this.options.edition ?? WHEAT_EDITION,
+      publicKey: this.options.publicKey ?? null,
+      requiresSignature: this.options.provider.requiresSignature,
+    });
   }
 
   async confirmSuccessfulStartup() {
@@ -130,6 +154,11 @@ export class UpdateService {
         verifyReleaseSignature(release, this.options.publicKey ?? null);
         await this.logger.log("signature-valid", { availableVersion: release.version, algorithm: release.signature?.algorithm });
       }
+
+      // Which installer belongs to this edition is settled before the update is
+      // offered: a release this build cannot install is not an update it should
+      // invite somebody to start.
+      this.projectRelease(release);
 
       const isNewer = assertUpdateCompatibility(this.options.currentVersion, release);
       if (!isNewer) {
@@ -216,21 +245,27 @@ export class UpdateService {
         verifyReleaseSignature(release, this.options.publicKey ?? null);
       }
       assertUpdateCompatibility(this.options.currentVersion, release);
+      const editionRelease = this.projectRelease(release);
 
       const stagingDirectory = path.join(this.options.stateDirectory, "staging", release.version);
       await fs.promises.rm(stagingDirectory, { recursive: true, force: true });
-      await this.logger.log("download-started", { availableVersion: release.version, artifact: path.basename(release.artifact), declaredSize: release.artifactSize ?? null });
+      await this.logger.log("download-started", {
+        availableVersion: release.version,
+        edition: this.options.edition ?? WHEAT_EDITION,
+        artifact: path.basename(editionRelease.artifact),
+        declaredSize: editionRelease.artifactSize ?? null,
+      });
       const downloading = await this.setStatus({
         phase: "downloading",
         availableVersion: release.version,
         availableRelease: offerFrom(release),
         message: `Downloading update ${release.version}`,
         error: undefined,
-        download: { transferredBytes: 0, totalBytes: release.artifactSize ?? null, percent: release.artifactSize ? 0 : null },
+        download: { transferredBytes: 0, totalBytes: editionRelease.artifactSize ?? null, percent: editionRelease.artifactSize ? 0 : null },
       });
 
       let lastLoggedPercent = -1;
-      const acquired = await this.options.provider.acquireUpdate(release, stagingDirectory, (progress) => {
+      const acquired = await this.options.provider.acquireUpdate(editionRelease, stagingDirectory, (progress) => {
         // Emit in transfer order. Async state reads could finish after verification
         // began and silently discard the final progress event on fast downloads.
         this.emit({ ...downloading.status, download: progress });
@@ -246,7 +281,7 @@ export class UpdateService {
 
       await this.setStatus({ phase: "verifying", message: `Verifying update ${release.version}`, download: undefined });
       await this.options.provider.validateUpdate(acquired);
-      await this.logger.log("artifact-valid", { availableVersion: release.version, artifact: path.basename(acquired.artifactPath), sha256: release.sha256 });
+      await this.logger.log("artifact-valid", { availableVersion: release.version, artifact: path.basename(acquired.artifactPath), sha256: editionRelease.sha256 });
 
       const staged: StagedUpdate = { ...acquired, stagedAt: new Date().toISOString(), source: this.options.provider.name };
       const state = await this.store.read();

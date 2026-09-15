@@ -1099,7 +1099,7 @@
   overflow: auto;
   overscroll-behavior: contain;
   background: rgb(var(--shadow-rgb) / 0.42);
-  backdrop-filter: blur(2px);
+  backdrop-filter: blur(var(--blur-scrim));
 }
 
 .books13-dialog-backdrop > * { max-height: 100%; max-width: 100%; }

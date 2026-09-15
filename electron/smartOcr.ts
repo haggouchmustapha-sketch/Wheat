@@ -16,6 +16,17 @@ import { evaluateTotals } from "./ocrAmounts";
 import { extractDocumentFields, type DetectedParty, type ExtractionContext, type ExtractionResult } from "./ocrFieldExtraction";
 import { reviewDocumentWithAi, type AiReviewChat, type AiReviewOutcome } from "./ocrAiReview";
 import { readWheatEnv } from "./runtimeEnvironment";
+import { WHEAT_EDITION_PROFILE } from "../src/wheatEdition";
+import {
+  CloudOcrUnavailableError,
+  ocrEngineOrder,
+  recognizeWithCloud,
+  requiresCloudRecognition,
+  CloudOcrFailureError,
+  type CloudOcrRemedy,
+  type CloudOcrRuntime,
+  type OcrEngine,
+} from "./cloudOcr";
 
 type ExistingDocument = {
   id: string;
@@ -106,6 +117,41 @@ export type SmartOcrProgress = {
 
 export type SmartOcrProgressListener = (event: SmartOcrProgress) => void;
 
+/**
+ * Who reads a page, for this build and these settings.
+ *
+ * Threaded through recognition rather than read from a module-level constant so
+ * that the decision is made once, by the caller, and every page of every
+ * document in one import is read by the same engines in the same order. It is
+ * also what makes the whole path testable without an edition-specific build.
+ */
+export type RecognitionPlan = {
+  /** Engines to try, in order. Always ends at the local Tesseract fallback. */
+  order: OcrEngine[];
+  cloud: { runtime: CloudOcrRuntime; consentGiven: boolean } | null;
+  /**
+   * Called when a cloud reading was attempted and did not work.
+   *
+   * The document is still read — the local fallback takes over — so this is not
+   * an error the import has to stop for. It is the difference between "Wheat
+   * read your invoice, less well than it could have, and never said why" and a
+   * sentence telling the accountant that their provider allowance is used up.
+   */
+  onCloudFailure?: (failure: { message: string; remedy: CloudOcrRemedy }) => void;
+};
+
+export function resolveRecognitionPlan(input: {
+  cloud?: { runtime: CloudOcrRuntime; enabled: boolean; consentGiven: boolean } | null;
+  hasBundledLocalOcr?: boolean;
+}): RecognitionPlan {
+  const cloud = input.cloud ?? null;
+  const order = ocrEngineOrder({
+    hasBundledLocalOcr: input.hasBundledLocalOcr,
+    cloudOcrEnabled: Boolean(cloud?.enabled),
+  });
+  return { order, cloud: cloud?.enabled ? { runtime: cloud.runtime, consentGiven: cloud.consentGiven } : null };
+}
+
 /** The one-way channel batch progress is pushed to the renderer on. */
 export const SMART_OCR_PROGRESS_CHANNEL = "wheat:smart-ocr:progress";
 
@@ -194,6 +240,11 @@ export async function processSmartOcrFiles(app: App, params: {
    * pipeline stays fully local, which is the default.
    */
   aiReview?: AiReviewChat;
+  /**
+   * Who reads a scanned page. Absent means the local engines only, which is
+   * exactly the behaviour Wheat had before cloud recognition existed.
+   */
+  recognition?: RecognitionPlan;
   /** Called as each document starts and finishes, for a progressive UI. */
   onProgress?: SmartOcrProgressListener;
   /** Overrides how many documents are recognised at once. Tests pin it to 1. */
@@ -208,6 +259,17 @@ export async function processSmartOcrFiles(app: App, params: {
       // A listener that throws must not abort an import that is otherwise fine.
     }
   };
+  // Asked before a single page is rendered. A build whose only recogniser is
+  // the cloud cannot read a scan without a connection, and finding that out
+  // thirty rasterised pages later would waste the machine's time and the
+  // accountant's. Files that need no recognition at all — a CSV, a spreadsheet,
+  // a PDF with a text layer — never trigger it.
+  const plan = params.recognition ?? resolveRecognitionPlan({});
+  if (requiresCloudRecognition(plan.order) && filePaths.some(mayNeedRecognition)) {
+    if (!plan.cloud?.consentGiven) throw new CloudOcrUnavailableError("CONSENT_REQUIRED");
+    if (!plan.cloud.runtime.isConnected()) throw new CloudOcrUnavailableError("NOT_CONNECTED");
+  }
+
   report({ phase: "BATCH_START", fileName: "", index: 0, completed: 0 });
 
   // Documents are independent up to the duplicate check, and the recognition
@@ -215,21 +277,36 @@ export async function processSmartOcrFiles(app: App, params: {
   // the machine idle for the whole of a batch import; the duplicate pass below
   // is what keeps the *result* identical to the sequential order.
   let completed = 0;
+  /**
+   * The one failure that stops the whole import instead of marking a document.
+   *
+   * A build whose only recogniser is the cloud, with no authorised provider,
+   * cannot read *any* scan — so filing thirty documents as "unreadable" would
+   * be thirty pieces of work to undo once the connection exists. The import is
+   * abandoned before anything is written, and the interface asks for the
+   * connection and runs this very same import again.
+   */
+  let cloudUnavailable: CloudOcrUnavailableError | null = null;
   const results = await mapWithConcurrency(filePaths, resolveOcrConcurrency(params.concurrency), async (filePath, index) => {
     report({ phase: "DOCUMENT_START", fileName: path.basename(filePath), index, completed });
     try {
-      const result = await analyzeSmartOcrFile(app, params, filePath);
+      const result = await analyzeSmartOcrFile(app, params, filePath, plan);
       completed += 1;
       report({ phase: "DOCUMENT_DONE", fileName: path.basename(filePath), index, completed, status: result.status, documentType: result.type, cached: result.reusedRecognition });
       return result;
     } catch (error) {
       // One unreadable document must never take the other twenty-nine with it.
       completed += 1;
+      if (error instanceof CloudOcrUnavailableError) cloudUnavailable ??= error;
       const message = errorMessage(error);
       report({ phase: "DOCUMENT_DONE", fileName: path.basename(filePath), index, completed, status: "TO_REVIEW", error: message });
       return buildUnsupportedResult(app, params.companyName, filePath, `La lecture de ce document a échoué : ${message}`);
     }
   });
+  if (cloudUnavailable) {
+    report({ phase: "BATCH_DONE", fileName: "", index: filePaths.length, completed });
+    throw cloudUnavailable;
+  }
 
   // Duplicate detection is order-dependent — the first occurrence keeps the
   // page, the later ones are marked — so it runs once, in input order, after
@@ -254,10 +331,30 @@ export async function processSmartOcrFiles(app: App, params: {
   return results;
 }
 
-/** How many documents to recognise at once, matched to the sidecar pool. */
+/**
+ * Whether this file could reach an image recogniser at all.
+ *
+ * A PDF is included because a scanned one will be rasterised; a PDF that turns
+ * out to carry a usable text layer simply never reaches the recogniser, and
+ * asking about a connection slightly too often is far better than abandoning an
+ * import halfway through because nobody asked at all.
+ */
+function mayNeedRecognition(filePath: string) {
+  const extension = path.extname(filePath).toLowerCase();
+  return extension === ".pdf" || imageExtensions.has(extension);
+}
+
+/**
+ * How many documents to recognise at once.
+ *
+ * Matched to the local sidecar pool, then capped by the edition's resource
+ * budget. On Lightweight that cap is one: the recognition is remote, so running
+ * four at once buys throughput nobody asked for at the cost of four decoded
+ * page images resident at the same time on a machine with four gigabytes.
+ */
 function resolveOcrConcurrency(requested?: number) {
   if (Number.isInteger(requested) && (requested as number) >= 1) return requested as number;
-  return Math.max(1, paddleOcrPoolSize());
+  return Math.max(1, Math.min(WHEAT_EDITION_PROFILE.resource.maxOcrConcurrency, paddleOcrPoolSize()));
 }
 
 /**
@@ -292,14 +389,14 @@ async function analyzeSmartOcrFile(app: App, params: {
   companyName: string;
   company?: { name?: string | null; ice?: string | null; taxId?: string | null } | null;
   aiReview?: AiReviewChat;
-}, filePath: string): Promise<SmartOcrResult> {
+}, filePath: string, plan: RecognitionPlan): Promise<SmartOcrResult> {
   {
     const extension = path.extname(filePath).toLowerCase();
     if (!acceptedExtensions.has(extension)) {
       return buildUnsupportedResult(app, params.companyName, filePath, `Format ${extension || "sans extension"} non pris en charge.`);
     }
 
-    const extraction = await runWheatVisionOcr(app, filePath, extension);
+    const extraction = await runWheatVisionOcr(app, filePath, extension, plan);
     // One logical document, not a pile of pages: repeated headers are read
     // once and a table split by a page break is put back together before any
     // field is looked for.
@@ -562,7 +659,7 @@ function uniqueStoredName(sourcePath: string) {
  * layer or in the dossier's own identity takes effect immediately.
  */
 const RECOGNITION_CACHE_VERSION = `${engineVersion}-1`;
-const RECOGNITION_CACHE_LIMIT = 400;
+const RECOGNITION_CACHE_LIMIT = WHEAT_EDITION_PROFILE.resource.recognitionCacheLimit;
 
 function recognitionCacheDir(app: App) {
   return path.join(resolveUserDataDir(app), "ocr-cache", "recognition");
@@ -600,16 +697,23 @@ function writeRecognitionCache(app: App, key: string, output: WheatOcrOutput) {
   }
 }
 
-async function runWheatVisionOcr(app: App, filePath: string, extension: string): Promise<WheatOcrOutput> {
-  const key = crypto.createHash("sha256").update(fs.readFileSync(filePath)).update(extension).digest("hex");
+async function runWheatVisionOcr(app: App, filePath: string, extension: string, plan: RecognitionPlan): Promise<WheatOcrOutput> {
+  // The engines are part of the key: a page read by the cloud and the same page
+  // read locally are different readings, and a cache that conflated them would
+  // serve a Tesseract fallback forever after one offline import.
+  const key = crypto.createHash("sha256")
+    .update(fs.readFileSync(filePath))
+    .update(extension)
+    .update(plan.order.join(">"))
+    .digest("hex");
   const cached = readRecognitionCache(app, key);
   if (cached) return cached;
-  const output = await recognizeWheatVision(app, filePath, extension);
+  const output = await recognizeWheatVision(app, filePath, extension, plan);
   if (output.text.trim().length >= 8) writeRecognitionCache(app, key, output);
   return output;
 }
 
-async function recognizeWheatVision(app: App, filePath: string, extension: string): Promise<WheatOcrOutput> {
+async function recognizeWheatVision(app: App, filePath: string, extension: string, plan: RecognitionPlan): Promise<WheatOcrOutput> {
   if (extension === ".txt" || extension === ".csv") {
     const text = fs.readFileSync(filePath, "utf8");
     return {
@@ -625,8 +729,8 @@ async function recognizeWheatVision(app: App, filePath: string, extension: strin
   }
 
   if (spreadsheetExtensions.has(extension)) return extractSpreadsheet(filePath);
-  if (extension === ".pdf") return extractPdf(app, filePath);
-  return extractImage(app, filePath);
+  if (extension === ".pdf") return extractPdf(app, filePath, plan);
+  return extractImage(app, filePath, plan);
 }
 
 async function extractSpreadsheet(filePath: string): Promise<WheatOcrOutput> {
@@ -681,7 +785,7 @@ function hasUsableTextLayer(text: string) {
   return readable >= 60 && readable / trimmed.length >= 0.45;
 }
 
-async function extractPdf(app: App, filePath: string): Promise<WheatOcrOutput> {
+async function extractPdf(app: App, filePath: string, plan: RecognitionPlan): Promise<WheatOcrOutput> {
   const warnings: string[] = [];
   const pages: WheatOcrPage[] = [];
   const tables: string[][][] = [];
@@ -745,7 +849,7 @@ async function extractPdf(app: App, filePath: string): Promise<WheatOcrOutput> {
           .map((page: any, index: number) => ({ pageNo: Number(page.pageNumber) || first + index, data: page.data }))
           .filter((page: { pageNo: number; data: unknown }) => page.data && scannedPages.includes(page.pageNo));
         const recognized = await mapWithConcurrency(rasterized, resolveOcrConcurrency(), async (page: { pageNo: number; data: any }) =>
-          recognizeImageWithPreprocessing(app, Buffer.from(page.data), page.pageNo));
+          recognizeImageWithPreprocessing(app, Buffer.from(page.data), page.pageNo, plan));
         for (const pageResult of recognized) {
           pages.push(pageResult);
           if (pageResult.tables?.length) tables.push(...pageResult.tables);
@@ -789,10 +893,10 @@ async function extractPdf(app: App, filePath: string): Promise<WheatOcrOutput> {
   };
 }
 
-async function extractImage(app: App, filePath: string): Promise<WheatOcrOutput> {
+async function extractImage(app: App, filePath: string, plan: RecognitionPlan): Promise<WheatOcrOutput> {
   const warnings: string[] = [];
   try {
-    const page = await recognizeImageWithPreprocessing(app, filePath, 1);
+    const page = await recognizeImageWithPreprocessing(app, filePath, 1, plan);
     return {
       text: page.text,
       confidence: page.confidence,
@@ -804,6 +908,9 @@ async function extractImage(app: App, filePath: string): Promise<WheatOcrOutput>
       note: "",
     };
   } catch (error) {
+    // A missing cloud connection is not an unreadable image: it has to reach the
+    // caller intact so the import can be resumed rather than filed as failed.
+    if (error instanceof CloudOcrUnavailableError) throw error;
     warnings.push(`Image OCR failed: ${errorMessage(error)}`);
     return {
       text: "",
@@ -818,33 +925,108 @@ async function extractImage(app: App, filePath: string): Promise<WheatOcrOutput>
   }
 }
 
-async function recognizeImageWithPreprocessing(app: App, input: string | Buffer, pageNo: number): Promise<WheatOcrPage> {
+/**
+ * Reads one page, trying each engine of the plan in turn.
+ *
+ * The engines differ in where the work happens and in nothing else: each one is
+ * asked for the text of the same normalised image, and whichever answers first
+ * with a usable reading produces the page. Everything downstream — the field
+ * readers, the totals arithmetic, the document understanding, the review screen
+ * — is identical whatever answered, which is what lets the two editions share
+ * one document workflow rather than two.
+ *
+ * Tesseract is not in the loop: it is the fallback both editions always carry,
+ * and it runs when nothing before it produced a reading. That is what keeps an
+ * offline Lightweight machine reading documents at all.
+ */
+async function recognizeImageWithPreprocessing(app: App, input: string | Buffer, pageNo: number, plan: RecognitionPlan): Promise<WheatOcrPage> {
   const candidates: WheatOcrPage[] = [];
-  const paddleWarnings: string[] = [];
-  try {
-    const paddleVariant = await buildPaddlePrimaryImage(input);
-    const paddle = await recognizeWithPaddle(app, paddleVariant.buffer, { mode: "ocr", extension: ".png" });
-    const paddleText = normalizeText(paddle.text);
-    if (paddleText.length >= 8) {
-      const paddleCandidate: WheatOcrPage = {
-        page: pageNo,
-        text: paddleText,
-        confidence: paddle.confidence,
-        engine: `${paddle.engine}:${paddle.engineVersion}`,
-        preprocessing: [...paddleVariant.steps, "paddleocr-local-primary", ...paddle.warnings.map((warning) => `note:${warning}`)],
-        words: paddle.words,
-        tables: paddle.tables,
-        source: { width: paddleVariant.width, height: paddleVariant.height },
-      };
-      return {
-        ...paddleCandidate,
-        candidates: [{ engine: paddleCandidate.engine, confidence: paddleCandidate.confidence }],
-      };
+  const engineNotes: string[] = [];
+
+  for (const engine of plan.order) {
+    if (engine === "tesseract") break;
+    if (engine === "paddle") {
+      try {
+        const paddleVariant = await buildPaddlePrimaryImage(input);
+        const paddle = await recognizeWithPaddle(app, paddleVariant.buffer, { mode: "ocr", extension: ".png" });
+        const paddleText = normalizeText(paddle.text);
+        if (paddleText.length >= 8) {
+          const paddleCandidate: WheatOcrPage = {
+            page: pageNo,
+            text: paddleText,
+            confidence: paddle.confidence,
+            engine: `${paddle.engine}:${paddle.engineVersion}`,
+            preprocessing: [...paddleVariant.steps, "paddleocr-local-primary", ...paddle.warnings.map((warning) => `note:${warning}`)],
+            words: paddle.words,
+            tables: paddle.tables,
+            source: { width: paddleVariant.width, height: paddleVariant.height },
+          };
+          return {
+            ...paddleCandidate,
+            candidates: [{ engine: paddleCandidate.engine, confidence: paddleCandidate.confidence }],
+          };
+        }
+        engineNotes.push(...paddle.warnings);
+        engineNotes.push("PaddleOCR n'a retourné aucun texte exploitable; repli sur le moteur suivant.");
+      } catch (error) {
+        engineNotes.push(`PaddleOCR indisponible; repli sur le moteur suivant: ${errorMessage(error)}`);
+      }
+      continue;
     }
-    paddleWarnings.push(...paddle.warnings);
-    paddleWarnings.push("PaddleOCR n'a retourné aucun texte exploitable; repli Tesseract local.");
-  } catch (error) {
-    paddleWarnings.push(`PaddleOCR indisponible; repli Tesseract local: ${errorMessage(error)}`);
+
+    // Cloud recognition.
+    const cloud = plan.cloud;
+    if (!cloud) continue;
+    const cloudVariant = await buildCloudImage(input);
+    try {
+      const result = await recognizeWithCloud(
+        cloud.runtime,
+        { mimeType: "image/jpeg", base64: cloudVariant.buffer.toString("base64") },
+        { consentGiven: cloud.consentGiven },
+      );
+      const cloudText = normalizeText(result.text);
+      if (cloudText.length >= 8) {
+        const cloudCandidate: WheatOcrPage = {
+          page: pageNo,
+          text: cloudText,
+          confidence: result.confidence,
+          engine: `${result.engine}:${result.modelId}`,
+          preprocessing: [...cloudVariant.steps, "wheat-cloud-ocr", ...result.warnings.map((warning) => `note:${warning}`)],
+          // A transcription carries no page geometry. Words are derived from the
+          // text so the layout helpers see the same shape they always do, simply
+          // without coordinates — they already degrade to line order without them.
+          words: wordsFromText(cloudText),
+          tables: result.tables,
+          source: { width: cloudVariant.width, height: cloudVariant.height },
+        };
+        return {
+          ...cloudCandidate,
+          candidates: [{ engine: cloudCandidate.engine, confidence: cloudCandidate.confidence }],
+        };
+      }
+      engineNotes.push("La lecture en ligne n'a retourné aucun texte exploitable; repli sur le moteur local.");
+    } catch (error) {
+      if (error instanceof CloudOcrUnavailableError) {
+        /*
+         * Missing authorisation is a decision for the caller when the cloud is
+         * the only recogniser this build has: the import stops, the interface
+         * asks once, and the same files are read straight afterwards.
+         *
+         * When a local engine comes first it is not a decision at all. A
+         * Standard user who switched cloud reading on and never completed the
+         * connection must not have a whole import abandoned because one page
+         * fell past PaddleOCR — Tesseract reads it, exactly as it would have
+         * before cloud reading existed.
+         */
+        if (requiresCloudRecognition(plan.order)) throw error;
+        engineNotes.push("Lecture en ligne non autorisée sur ce poste; repli sur le moteur local.");
+        continue;
+      }
+      if (error instanceof CloudOcrFailureError) {
+        plan.onCloudFailure?.({ message: error.message, remedy: error.remedy });
+      }
+      engineNotes.push(`Lecture en ligne indisponible; repli sur le moteur local: ${errorMessage(error)}`);
+    }
   }
 
   const variants = await buildImageVariants(input);
@@ -879,7 +1061,7 @@ async function recognizeImageWithPreprocessing(app: App, input: string | Buffer,
     ...best,
     text: mergedText.length > best.text.length + 40 ? mergedText : best.text,
     confidence: Math.round(Math.max(best.confidence, average(candidates.map((candidate) => candidate.confidence)))),
-    preprocessing: [...best.preprocessing, ...paddleWarnings.map((warning) => `note:${warning}`)],
+    preprocessing: [...best.preprocessing, ...engineNotes.map((warning) => `note:${warning}`)],
     tables: best.tables,
     candidates: candidateSummary,
   };
@@ -903,6 +1085,35 @@ async function buildPaddlePrimaryImage(input: string | Buffer): Promise<{ buffer
     width: info.width,
     height: info.height,
     steps: ["sharp-auto-rotate", resizeWidth ? `paddle-resize-width-${resizeWidth}` : "paddle-native-size", "paddle-png"],
+  };
+}
+
+/**
+ * The page as it is sent to a cloud recogniser.
+ *
+ * The same rotation and the same 1800-pixel ceiling as the local path, so the
+ * two engines read the same page — but encoded as JPEG rather than PNG. The
+ * person waiting on this is, by construction, on the machine and often the
+ * connection least able to afford the upload: the same page is roughly an order
+ * of magnitude smaller this way, and a document scan has no flat colour for
+ * lossless encoding to exploit. Quality 82 is above the point where a printed
+ * amount starts to degrade.
+ */
+async function buildCloudImage(input: string | Buffer): Promise<{ buffer: Buffer; steps: string[]; width: number; height: number }> {
+  const sharp = await getSharp();
+  const metadata = await sharp(input, { limitInputPixels: false }).rotate().metadata();
+  const width = metadata.width ?? 0;
+  const resizeWidth = width > 1800 ? 1800 : width > 0 && width < 1200 ? 1600 : undefined;
+  const { data, info } = await sharp(input, { limitInputPixels: false })
+    .rotate()
+    .resize(resizeWidth ? { width: resizeWidth, withoutEnlargement: false } : undefined)
+    .jpeg({ quality: 82, mozjpeg: true })
+    .toBuffer({ resolveWithObject: true });
+  return {
+    buffer: data,
+    width: info.width,
+    height: info.height,
+    steps: ["sharp-auto-rotate", resizeWidth ? `cloud-resize-width-${resizeWidth}` : "cloud-native-size", "cloud-jpeg-q82"],
   };
 }
 

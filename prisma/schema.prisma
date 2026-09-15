@@ -16,6 +16,15 @@ model Company {
   city                     String
   baseCurrency             String                    @default("MAD")
   vatFrequency             String                    @default("MONTHLY")
+  rc                       String?
+  rcTribunal               String?
+  patente                  String?
+  cnssAffiliation          String?
+  address                  String?
+  phone                    String?
+  email                    String?
+  capitalCents             BigInt?
+  activitySector           String?
   fiscalYears              FiscalYear[]
   accounts                 Account[]
   journals                 Journal[]
@@ -290,6 +299,13 @@ model Counterparty {
   legalName                  String?
   ice                        String?
   taxId                      String?
+  rc                         String?
+  patente                    String?
+  cnss                       String?
+  rib                        String?
+  vatLiable                  Boolean  @default(true)
+  defaultTaxRateCode         String?
+  exonerationReason          String?
   email                      String?
   phone                      String?
   address                    String?
@@ -348,6 +364,10 @@ model Invoice {
   sequenceYear              Int?
   sequenceNo                Int?
   currency                  String                   @default("MAD")
+  exchangeRate              String?
+  foreignHtCents            BigInt?
+  foreignVatCents           BigInt?
+  foreignTtcCents           BigInt?
   counterpartyNameSnapshot  String?
   iceSnapshot               String?
   taxIdSnapshot             String?
@@ -362,6 +382,8 @@ model Invoice {
   creditedInvoiceId         String?
   creditReason              String?
   taxConfigurationVersionId String?
+  exonerationReason         String?
+  vatRegimeCode             String?
   artifactRequired          Boolean                  @default(false)
   controlAccountId          String?
   vatAccountId              String?
@@ -686,6 +708,13 @@ model Employee {
   amoEmployeeCents  BigInt
   irCents           BigInt
   netSalaryCents    BigInt
+  hiredOn           DateTime?
+  maritalStatus     String?
+  dependents        Int              @default(0)
+  contractType      String?
+  cimrRateBps       Int?
+  rib               String?
+  seniorityBaseOn   DateTime?
   company           Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
   payrollSnapshots  PayrollRunLine[]
 }

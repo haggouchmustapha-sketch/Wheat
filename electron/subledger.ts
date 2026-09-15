@@ -319,6 +319,16 @@ function normalizeCounterpartyPayload(payload: unknown) {
   });
   const ice = optionalText(input.ice, 40);
   const taxId = optionalText(input.taxId, 60);
+  // A tax rate is named by its code rather than referenced by row id: tax
+  // configurations are versioned and superseded, so a code keeps resolving
+  // across revisions where a foreign key would pin one. It is upper-cased and
+  // shape-checked against the code format TaxRateDefinition accepts, so a
+  // default that could never resolve is refused at entry rather than silently
+  // ignored when an invoice is drafted.
+  const defaultTaxRateCode = optionalText(input.defaultTaxRateCode, 40)?.toUpperCase() ?? null;
+  if (defaultTaxRateCode && !/^[A-Z0-9][A-Z0-9._-]{0,39}$/.test(defaultTaxRateCode)) {
+    throw new Error("Le code de taux de TVA par défaut contient des caractères non autorisés.");
+  }
   return {
     companyId: requireId(input.companyId, "La société"),
     kind,
@@ -326,6 +336,15 @@ function normalizeCounterpartyPayload(payload: unknown) {
     legalName: optionalText(input.legalName, 250),
     ice,
     taxId,
+    // Length-capped only: the registry, the commune and the CNSS each set their
+    // own format, so a pattern here would reject valid identifiers.
+    rc: optionalText(input.rc, 40),
+    patente: optionalText(input.patente, 40),
+    cnss: optionalText(input.cnss, 40),
+    rib: optionalText(input.rib, 40),
+    vatLiable: optionalBoolean(input.vatLiable, true),
+    defaultTaxRateCode,
+    exonerationReason: optionalText(input.exonerationReason, 250),
     email: optionalText(input.email, 250),
     phone: optionalText(input.phone, 80),
     address: optionalText(input.address, 500),

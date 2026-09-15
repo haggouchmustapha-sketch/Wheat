@@ -535,6 +535,7 @@ test("the IPC surface is registered exactly once per channel and returns masked 
         },
       },
       service: instance,
+      openExternal: () => undefined,
     });
 
     expect([...handlers.keys()].sort()).toEqual([
@@ -544,6 +545,13 @@ test("the IPC surface is registered exactly once per channel and returns masked 
       "wheat:ai:provider:set-key",
       "wheat:ai:provider:status",
       "wheat:ai:provider:test",
+      // Wheat Cloud AI: the accountant's surface over the same service. Status,
+      // connect, disconnect and one preference — never a key in either
+      // direction. `tests/wheat-cloud-security.spec.cjs` holds that line.
+      "wheat:cloud:authorize",
+      "wheat:cloud:disconnect",
+      "wheat:cloud:preferences",
+      "wheat:cloud:status",
     ]);
 
     const status = await handlers.get("wheat:ai:provider:status")(null, {});
@@ -564,6 +572,7 @@ test("a rejected key never appears in the error the renderer receives", async ()
     service.registerWheatAiProviderIpc({
       ipcMain: { handle: (channel, listener) => handlers.set(channel, listener) },
       service: instance,
+      openExternal: () => undefined,
     });
     const rejected = await handlers
       .get("wheat:ai:provider:set-key")(null, { provider: "openrouter", apiKey: "sk-or-v1-badkeywithspace here" })
@@ -591,4 +600,33 @@ test("no source file hard-codes a provider API key", () => {
   };
   roots.forEach(walk);
   expect(offenders).toEqual([]);
+});
+
+test("a provider that could not be reached is reported as such, not as a missing capability", async () => {
+  /*
+   * Two providers configured, one unreachable, and the other offering nothing
+   * usable. Before this was distinguished, the combination produced "no model
+   * here can read an image", which sends somebody to their account settings to
+   * repair what is actually a dropped connection. The unreachable provider is
+   * the likelier explanation and the only actionable one.
+   */
+  const { instance, directory } = buildService(async (url) => {
+    if (String(url).includes("openrouter.ai")) throw new Error("fetch failed");
+    // Groq answers, but its models stay unusable without explicit Free consent.
+    return jsonResponse({ data: [{ id: "llama-chat", context_window: 8192, active: true }] });
+  });
+  try {
+    instance.setKey("openrouter", "sk-or-v1-abcdefghijklmnopqrstuvwxyz");
+    instance.setKey("groq", "gsk_abcdefghijklmnopqrstuvwxyz0123456789");
+    const failure = await instance
+      .chat({ messages: [{ role: "user", content: "lis cette page", images: [{ mimeType: "image/png", base64: "AAAA" }] }] })
+      .then(() => null, (error) => error);
+
+    expect(failure, "the call must fail").toBeTruthy();
+    expect(failure.message).toContain("OpenRouter");
+    expect(failure.message).not.toContain("capable de lire une image");
+    expect(failure.kind).toBe("PROVIDER_ERROR");
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });

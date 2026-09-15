@@ -18,6 +18,9 @@ import {
   type WheatAiChatMessage,
 } from "./wheatAiProviders";
 import { SecureStorageUnavailableError, WheatAiSecretStore, type ProviderId } from "./wheatAiSecrets";
+import { WHEAT_EDITION_PROFILE } from "../src/wheatEdition";
+import { authorizeCloudProvider, type AuthorizeOptions } from "./cloudAuthorization";
+import type { CloudOcrRuntime } from "./cloudOcr";
 
 /**
  * Wheat AI provider service.
@@ -34,7 +37,21 @@ export const WHEAT_AI_PROVIDER_CHANNELS = {
   test: "wheat:ai:provider:test",
   preferences: "wheat:ai:provider:preferences",
   models: "wheat:ai:provider:models",
+  cloudStatus: "wheat:cloud:status",
+  cloudAuthorize: "wheat:cloud:authorize",
+  cloudDisconnect: "wheat:cloud:disconnect",
+  cloudPreferences: "wheat:cloud:preferences",
 } as const;
+
+/**
+ * The provider Wheat Cloud AI connects to without an API key.
+ *
+ * One provider offers an authorisation flow appropriate to a desktop
+ * application today, so that is the one "Activer Wheat Cloud AI" uses. Naming
+ * it here rather than throughout the cloud code is what keeps adding a second
+ * one a change to this constant and an adapter, not to the document workflow.
+ */
+export const CLOUD_AUTHORIZATION_PROVIDER: ProviderId = "openrouter";
 
 export const PROVIDER_IDS: ProviderId[] = ["openrouter", "groq"];
 
@@ -93,6 +110,27 @@ export type ProviderPreferences = {
    * unavailable, never quietly replaced by a different one.
    */
   assistedReviewModelId: string | null;
+  /**
+   * Whether scanned pages may be read by the configured cloud provider.
+   *
+   * The default is the edition's, not a constant: Wheat Lightweight does not
+   * package the local recognition runtime, so cloud reading is how it reads a
+   * scan at all, while Standard reads locally and treats this as an addition.
+   * It stays a stored preference in both, because it is the user's decision in
+   * both — a Lightweight user may switch it off and keep the offline fallback,
+   * and a Standard user may switch it on.
+   */
+  cloudDocumentOcr: boolean;
+  /**
+   * Explicit, informed consent that a selected document may leave this machine.
+   *
+   * Separate from the switch above and never implied by it. Turning cloud
+   * reading on is a capability decision; this is the acknowledgement that an
+   * invoice, with its client names, ICE, IF, RC and amounts, is sent to the
+   * configured provider for analysis. Wheat asks once, in plain French, before
+   * the first document is ever sent.
+   */
+  cloudDocumentOcrConsent: boolean;
 };
 
 const DEFAULT_PREFERENCES: ProviderPreferences = {
@@ -105,6 +143,8 @@ const DEFAULT_PREFERENCES: ProviderPreferences = {
   assistedReview: true,
   assistedReviewRemoteConsent: false,
   assistedReviewModelId: null,
+  cloudDocumentOcr: WHEAT_EDITION_PROFILE.cloudOcrByDefault,
+  cloudDocumentOcrConsent: false,
 };
 
 type ProviderStatusRow = {
@@ -130,6 +170,17 @@ export type ProviderStatus = {
   /** Provider + model Wheat AI would use for the next question. */
   activeSelection: { provider: ProviderId | null; modelId: string | null; label: string; reason: string };
   maxFailoverAttempts: number;
+};
+
+export type CloudStatus = {
+  connected: boolean;
+  providers: string[];
+  authorizationProvider: string;
+  canAuthorize: boolean;
+  secureStorageAvailable: boolean;
+  documentOcrEnabled: boolean;
+  consentGiven: boolean;
+  localRecognitionAvailable: boolean;
 };
 
 type TestRecord = { testedAt: string; ok: boolean; message: string; freeModelCount: number | null };
@@ -174,6 +225,11 @@ function normalizeStoredPreferences(value: unknown): ProviderPreferences {
     assistedReviewModelId: typeof source.assistedReviewModelId === "string"
       ? source.assistedReviewModelId.trim().slice(0, 200) || null
       : null,
+    // Absent means "never decided", which is the edition's answer, not `false`:
+    // a Lightweight install that had never opened this screen would otherwise
+    // have no way to read a scan at all.
+    cloudDocumentOcr: typeof source.cloudDocumentOcr === "boolean" ? source.cloudDocumentOcr : WHEAT_EDITION_PROFILE.cloudOcrByDefault,
+    cloudDocumentOcrConsent: source.cloudDocumentOcrConsent === true,
   };
 }
 
@@ -189,11 +245,20 @@ export class WheatAiProviderService {
   private readonly unavailable = new UnavailableModelRegistry();
   private readonly adapters = new Map<ProviderId, ProviderAdapter>();
 
+  /**
+   * How this service reaches a provider. Held rather than only handed to the
+   * adapters because the authorisation exchange is the same outbound call to
+   * the same host, and must not reach it by a different route than everything
+   * else — a machine where one works and the other does not is the worst
+   * possible split.
+   */
+  private readonly fetchImpl: FetchLike;
+
   constructor(options: { directory: string; safeStorage: ConstructorParameters<typeof WheatAiSecretStore>[0]["safeStorage"]; fetchImpl?: FetchLike }) {
     this.secrets = new WheatAiSecretStore({ directory: options.directory, safeStorage: options.safeStorage });
     this.preferencesPath = path.join(options.directory, "wheat-ai-providers.json");
-    const fetchImpl = options.fetchImpl ?? ((url: string, init?: any) => (globalThis as any).fetch(url, init));
-    for (const provider of PROVIDER_IDS) this.adapters.set(provider, createProviderAdapter(provider, fetchImpl));
+    this.fetchImpl = options.fetchImpl ?? ((url: string, init?: any) => (globalThis as any).fetch(url, init));
+    for (const provider of PROVIDER_IDS) this.adapters.set(provider, createProviderAdapter(provider, this.fetchImpl));
   }
 
   /* ------------------------------------------------------------ preferences */
@@ -261,6 +326,14 @@ export class WheatAiProviderService {
       if (patch.assistedReviewModelId !== null && typeof patch.assistedReviewModelId !== "string") throw new Error("Le modele de relecture est invalide.");
       const value = patch.assistedReviewModelId === null ? null : patch.assistedReviewModelId.trim().slice(0, 200);
       next.assistedReviewModelId = value || null;
+    }
+    if (patch.cloudDocumentOcr !== undefined) {
+      if (typeof patch.cloudDocumentOcr !== "boolean") throw new Error("Le reglage de lecture des pieces par le cloud est invalide.");
+      next.cloudDocumentOcr = patch.cloudDocumentOcr;
+    }
+    if (patch.cloudDocumentOcrConsent !== undefined) {
+      if (typeof patch.cloudDocumentOcrConsent !== "boolean") throw new Error("Le consentement de traitement cloud est invalide.");
+      next.cloudDocumentOcrConsent = patch.cloudDocumentOcrConsent;
     }
     if (patch.documentAiReview !== undefined) {
       if (typeof patch.documentAiReview !== "boolean") throw new Error("Le reglage de relecture IA des documents est invalide.");
@@ -502,6 +575,86 @@ export class WheatAiProviderService {
     };
   }
 
+  /* ---------------------------------------------------------- Wheat Cloud AI */
+
+  /**
+   * What the accountant's "Wheat Cloud AI" panel shows.
+   *
+   * Deliberately not the advanced provider screen. That screen exists, keeps
+   * every one of its capabilities, and belongs to whoever wants to pin a model
+   * or paste a key of their own. This is the other audience: a status line, a
+   * connect button and nothing they have to understand.
+   */
+  getCloudStatus(): CloudStatus {
+    const preferences = this.getPreferences();
+    const configured = this.configuredProviders();
+    const connected = configured.length > 0;
+    return {
+      connected,
+      // Named only when it is the connection the guided flow established;
+      // a hand-configured provider is still a connection, and still counts.
+      providers: configured.map((provider) => PROVIDER_LABELS[provider]),
+      authorizationProvider: PROVIDER_LABELS[CLOUD_AUTHORIZATION_PROVIDER],
+      canAuthorize: this.isSecureStorageAvailable(),
+      secureStorageAvailable: this.isSecureStorageAvailable(),
+      documentOcrEnabled: preferences.cloudDocumentOcr,
+      consentGiven: preferences.cloudDocumentOcrConsent,
+      /**
+       * Whether a scan can be read at all without the cloud on this build.
+       * True for Standard, which packages the local recognition runtime.
+       */
+      localRecognitionAvailable: WHEAT_EDITION_PROFILE.hasBundledLocalOcr,
+    };
+  }
+
+  /**
+   * Connects Wheat Cloud AI to the user's own provider account.
+   *
+   * The key that comes back is theirs, is stored through the OS credential
+   * vault by the same store every other key uses, and is never returned to the
+   * renderer. Wheat holds no credential of its own anywhere in this path.
+   */
+  async authorizeCloud(options: AuthorizeOptions): Promise<CloudStatus> {
+    if (!this.isSecureStorageAvailable()) throw new SecureStorageUnavailableError();
+    const key = await authorizeCloudProvider({ fetchImpl: this.fetchImpl, ...options });
+    // Through `setKey`, so shape validation, cache invalidation and the masked
+    // record behave exactly as they do for a key somebody typed in.
+    this.setKey(CLOUD_AUTHORIZATION_PROVIDER, key);
+    return this.getCloudStatus();
+  }
+
+  /** Forgets the stored credential. The provider account itself is untouched. */
+  disconnectCloud(): CloudStatus {
+    for (const provider of this.configuredProviders()) this.deleteKey(provider);
+    return this.getCloudStatus();
+  }
+
+  /**
+   * The recognition runtime handed to the OCR pipeline.
+   *
+   * The pipeline sees a connection test and one vision call; the credential,
+   * the model ranking, the vision-capability filter and the bounded failover
+   * all stay here, behind the main-process boundary.
+   */
+  cloudOcrRuntime(): CloudOcrRuntime {
+    return {
+      isConnected: () => this.isRemoteAvailable(),
+      runVision: async (request) => {
+        const result = await this.chat({
+          messages: [
+            { role: "system", content: request.system },
+            { role: "user", content: request.user, images: request.images },
+          ],
+          temperature: 0,
+          // A full page of transcription is long; the assistant's 1024 default
+          // would cut an invoice off halfway down its line items.
+          maxTokens: 4096,
+        });
+        return { text: result.text, provider: PROVIDER_LABELS[result.provider], modelId: result.modelId };
+      },
+    };
+  }
+
   /** Free models exposed to the UI, prefixed so the AI workspace can route them. */
   async listSelectableModels(options: { refresh?: boolean } = {}): Promise<{
     models: Array<FreeModel & { selectionId: string }>;
@@ -575,6 +728,25 @@ export class WheatAiProviderService {
       unavailable: this.unavailable,
     });
 
+    /*
+     * A provider that could not be reached leaves no models behind, and an
+     * empty list is indistinguishable from a provider that genuinely offers
+     * nothing suitable — except that `errors` remembers the difference. Without
+     * this, a dropped connection while one provider still answers with zero
+     * usable models is reported as "no model here can read an image", which
+     * sends somebody to their account settings to fix their internet. The
+     * partial failure is the more likely explanation and the actionable one, so
+     * it is the one reported.
+     */
+    if (!candidates.length && errors.length) {
+      const detail = errors.map((entry) => `${PROVIDER_LABELS[entry.provider]} : ${entry.message}`).join(" ");
+      throw new WheatAiProviderError(
+        "PROVIDER_ERROR",
+        errors[0].provider,
+        `La liste des modèles n'a pas pu être chargée entièrement, aucun modèle utilisable n'est disponible. ${detail}`.trim(),
+      );
+    }
+
     return chatWithFailover(
       {
         getKey: (provider) => this.key(provider),
@@ -606,7 +778,12 @@ export function parseRemoteModelId(value: string): { provider: ProviderId; model
  * Minimal IPC surface. Every payload is validated here; nothing that could
  * carry a key back to the renderer is ever returned.
  */
-export function registerWheatAiProviderIpc(options: { ipcMain: IpcLike; service: WheatAiProviderService }): WheatAiProviderService {
+export function registerWheatAiProviderIpc(options: {
+  ipcMain: IpcLike;
+  service: WheatAiProviderService;
+  /** Opens a URL in the system browser. Supplied by the main process. */
+  openExternal: (url: string) => Promise<void> | void;
+}): WheatAiProviderService {
   const { ipcMain, service } = options;
 
   ipcMain.handle(WHEAT_AI_PROVIDER_CHANNELS.status, async (_event, payloadValue) => {
@@ -656,6 +833,8 @@ export function registerWheatAiProviderIpc(options: { ipcMain: IpcLike; service:
       assistedReview: payload.assistedReview as boolean | undefined,
       assistedReviewRemoteConsent: payload.assistedReviewRemoteConsent as boolean | undefined,
       assistedReviewModelId: payload.assistedReviewModelId as string | null | undefined,
+      cloudDocumentOcr: payload.cloudDocumentOcr as boolean | undefined,
+      cloudDocumentOcrConsent: payload.cloudDocumentOcrConsent as boolean | undefined,
     });
     return service.getStatus();
   });
@@ -667,6 +846,32 @@ export function registerWheatAiProviderIpc(options: { ipcMain: IpcLike; service:
     } catch (error) {
       throw new Error(redactSecrets(error instanceof Error ? error.message : String(error)), { cause: error });
     }
+  });
+
+  /* ------------------------------------------------------- Wheat Cloud AI */
+
+  ipcMain.handle(WHEAT_AI_PROVIDER_CHANNELS.cloudStatus, async () => service.getCloudStatus());
+
+  ipcMain.handle(WHEAT_AI_PROVIDER_CHANNELS.cloudAuthorize, async () => {
+    try {
+      // The URL is built inside the authorisation flow and opened in the
+      // *system* browser. The renderer never supplies it, so nothing it could
+      // send can make Wheat open an address of the renderer's choosing.
+      return await service.authorizeCloud({ openExternal: options.openExternal });
+    } catch (error) {
+      throw new Error(redactSecrets(error instanceof Error ? error.message : String(error)), { cause: error });
+    }
+  });
+
+  ipcMain.handle(WHEAT_AI_PROVIDER_CHANNELS.cloudDisconnect, async () => service.disconnectCloud());
+
+  ipcMain.handle(WHEAT_AI_PROVIDER_CHANNELS.cloudPreferences, async (_event, payloadValue) => {
+    const payload = record(payloadValue);
+    service.setPreferences({
+      cloudDocumentOcr: payload.documentOcrEnabled as boolean | undefined,
+      cloudDocumentOcrConsent: payload.consentGiven as boolean | undefined,
+    });
+    return service.getCloudStatus();
   });
 
   return service;

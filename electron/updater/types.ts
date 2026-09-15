@@ -1,5 +1,12 @@
 export const UPDATE_SCHEMA_VERSION = 1 as const;
 
+/** One edition's installer inside a release that publishes several. */
+export type UpdateEditionArtifact = {
+  artifact: string;
+  sha256: string;
+  artifactSize?: number;
+};
+
 export type UpdateRelease = {
   schemaVersion: typeof UPDATE_SCHEMA_VERSION;
   version: string;
@@ -10,6 +17,34 @@ export type UpdateRelease = {
   minimumVersion?: string;
   artifactSize?: number;
   signature?: {
+    algorithm: string;
+    value: string;
+  };
+  /**
+   * The installers published for this release, keyed by Wheat edition.
+   *
+   * Wheat publishes one release containing both editions, so an installed
+   * Wheat must be able to say *which* of them is its own update. The top-level
+   * `artifact`/`sha256` above stay the Standard installer: they are what every
+   * Wheat released before editions existed reads, and those installs must keep
+   * updating to Standard rather than stopping or crossing over.
+   *
+   * Optional, therefore, and only for that reason. A build that needs a
+   * non-Standard artifact and finds no entry for itself refuses the release
+   * instead of falling back to the top-level one — falling back is exactly the
+   * mistake of handing a Lightweight install the two-gigabyte Standard package.
+   */
+  editions?: Record<string, UpdateEditionArtifact>;
+  /**
+   * Signature over the `editions` map, alongside the signature over the rest.
+   *
+   * Two signatures rather than one enlarged payload: the payload the existing
+   * `signature` covers is byte-defined and already deployed, so changing it
+   * would make every installed Wheat reject every future release. The editions
+   * map therefore carries its own, bound to the same version so it cannot be
+   * lifted onto another release.
+   */
+  editionsSignature?: {
     algorithm: string;
     value: string;
   };

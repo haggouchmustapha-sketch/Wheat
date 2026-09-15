@@ -2,7 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import semver from "semver";
-import { hashFile, signRelease } from "./lib/releaseManifest.mjs";
+import { hashFile, signEditions, signRelease } from "./lib/releaseManifest.mjs";
+import { assertEdition, wheatInstallerFileName } from "./lib/wheatEditions.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 const packagePath = path.join(root, "package.json");
@@ -22,7 +23,7 @@ for (let index = 0; index < args.length; index += 1) {
     const note = args[++index]?.trim();
     if (!note) throw new Error("--note requires text.");
     notes.push(note);
-  } else if (["--notes-file", "--minimum-version", "--artifact", "--output", "--sign"].includes(argument)) {
+  } else if (["--notes-file", "--minimum-version", "--artifact", "--output", "--sign", "--edition"].includes(argument)) {
     const value = args[++index]?.trim();
     if (!value) throw new Error(`${argument} requires a value.`);
     values.set(argument, value);
@@ -45,12 +46,16 @@ const minimumVersion = values.get("--minimum-version");
 if (minimumVersion && !semver.valid(minimumVersion)) throw new Error("--minimum-version must be valid SemVer.");
 if (minimumVersion && semver.gt(minimumVersion, version)) throw new Error("--minimum-version cannot be newer than this release.");
 
+// Which edition this rehearsal feed serves. A local feed holds one installer,
+// so it declares exactly that edition: a Lightweight development build reading
+// a Standard-only feed must find nothing to install rather than the wrong file.
+const edition = assertEdition(values.get("--edition") ?? process.env.WHEAT_EDITION ?? "standard");
 const configuredArtifact = values.get("--artifact");
 const artifactPath = configuredArtifact
   ? path.resolve(root, configuredArtifact)
-  : path.join(root, "release", version, `WheatSetup-${version}.exe`);
+  : path.join(root, "release", version, wheatInstallerFileName(edition, version));
 if (!fs.existsSync(artifactPath) || !fs.statSync(artifactPath).isFile()) {
-  throw new Error(`Built NSIS installer not found at ${artifactPath}. Run npm run installer first or pass --artifact.`);
+  throw new Error(`Built NSIS installer not found at ${artifactPath}. Run npm run dist:${edition} first or pass --artifact.`);
 }
 if (path.extname(artifactPath).toLowerCase() !== ".exe") throw new Error("The local Windows update artifact must be an NSIS .exe installer.");
 
@@ -65,6 +70,9 @@ const release = {
   sha256,
   artifactSize: fs.statSync(artifactPath).size,
   ...(minimumVersion ? { minimumVersion } : {}),
+  editions: {
+    [edition]: { artifact: `${version}/${artifactName}`, sha256, artifactSize: fs.statSync(artifactPath).size },
+  },
 };
 
 // Signing is what lets a release travel over a network: an HTTPS feed refuses
@@ -73,10 +81,9 @@ const release = {
 // predates signing.
 const signingKeyPath = values.get("--sign");
 if (signingKeyPath) {
-  release.signature = {
-    algorithm: "ed25519",
-    value: signRelease(release, path.resolve(root, signingKeyPath)),
-  };
+  const keyPath = path.resolve(root, signingKeyPath);
+  release.signature = { algorithm: "ed25519", value: signRelease(release, keyPath) };
+  release.editionsSignature = { algorithm: "ed25519", value: signEditions(release, keyPath) };
 }
 
 const repositoryFeed = values.get("--output") ? path.resolve(root, values.get("--output")) : path.join(root, "updates");
@@ -90,7 +97,7 @@ if (!flags.has("--no-publish") && process.platform === "win32") {
   if (localFeed !== repositoryFeed) publishRelease(localFeed, artifactPath, release, flags.has("--force"));
 }
 
-console.log(`Created Wheat ${version} local update.`);
+console.log(`Created Wheat ${version} local update (${edition} edition).`);
 console.log(`Repository feed: ${repositoryFeed}`);
 if (localFeed) console.log(`Installed-app feed: ${localFeed}`);
 console.log(`SHA-256: ${sha256}`);

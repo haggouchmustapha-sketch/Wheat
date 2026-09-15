@@ -2,7 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import semver from "semver";
 import { createPublicKey, verify } from "node:crypto";
-import { RELEASE_MANIFEST_ASSET, canonicalReleasePayload, hashFile, releaseTagFor } from "./lib/releaseManifest.mjs";
+import { RELEASE_MANIFEST_ASSET, canonicalEditionsPayload, canonicalReleasePayload, hashFile, releaseTagFor } from "./lib/releaseManifest.mjs";
+import { WHEAT_EDITIONS } from "./lib/wheatEditions.mjs";
 import { RELEASE_BRANCH, gh, ghIsAuthenticated, ghJson, readPackageMetadata, readSourceProvenance, remoteBranchHead, repositoryRoot, resolveReleaseRepository } from "./lib/releaseRepository.mjs";
 
 /**
@@ -110,9 +111,27 @@ if (installerAsset.sha256 !== String(manifest.sha256).toLowerCase()) refuse("the
 if (manifest.signature) {
   const compiledKey = readCompiledPublicKey();
   if (!compiledKey) refuse("no WHEAT_UPDATE_PUBLIC_KEY is compiled into this build, so the signature cannot be checked against what clients hold.");
-  const ok = verify(null, Buffer.from(canonicalReleasePayload(manifest), "utf8"), createPublicKey(compiledKey), Buffer.from(manifest.signature.value, "base64"));
+  const key = createPublicKey(compiledKey);
+  const ok = verify(null, Buffer.from(canonicalReleasePayload(manifest), "utf8"), key, Buffer.from(manifest.signature.value, "base64"));
   if (!ok) refuse("the manifest signature does not verify against the public key compiled into Wheat.");
   console.log("  Signature verifies against the key compiled into Wheat.");
+
+  // Both editions, or neither. A release that published one installer and named
+  // two would leave half the installed base downloading a file that is not
+  // there, which is exactly the failure this pipeline exists to prevent.
+  if (!manifest.editions) refuse("the manifest publishes no per-edition installers; Lightweight installs would have nothing to update to.");
+  if (!manifest.editionsSignature) refuse("the per-edition installers are unsigned; every installed Wheat would refuse them.");
+  const editionsOk = verify(null, Buffer.from(canonicalEditionsPayload(manifest), "utf8"), key, Buffer.from(manifest.editionsSignature.value, "base64"));
+  if (!editionsOk) refuse("the editions signature does not verify against the public key compiled into Wheat.");
+  for (const edition of WHEAT_EDITIONS) {
+    const entry = manifest.editions[edition];
+    if (!entry) refuse(`the manifest names no installer for the ${edition} edition.`);
+    const named = path.basename(String(entry.artifact).replaceAll("\\", "/"));
+    const asset = plan.assets.find((candidate) => candidate.name === named);
+    if (!asset) refuse(`the manifest names "${named}" for the ${edition} edition, which is not among the prepared assets.`);
+    if (asset.sha256 !== String(entry.sha256).toLowerCase()) refuse(`the manifest digest for the ${edition} edition does not match the installer it names.`);
+    console.log(`  ${edition.padEnd(12)} ${named}  signed and matched`);
+  }
 }
 
 // ------------------------------------------------------- 6. remote state

@@ -322,6 +322,7 @@ export const WHEAT_WORKFLOW_REGISTRY: readonly WheatWorkflowDefinition[] = Objec
   exempt("bank.reconciliation_candidates", "wheat:bank:reconciliation:candidates", "Calculer les candidats de rapprochement", "BankMovement", READ_ONLY),
   exempt("bank.statement_parse", "wheat:bank:statement:parse", "Analyser un relevé", "BankStatementImport", READ_ONLY),
   exempt("bank.statement_review", "wheat:bank:statement:review", "Contrôler un relevé avant import", "BankStatementImport", READ_ONLY),
+  exempt("portfolio.overview", "wheat:portfolio:overview", "Lire l'état de tous les dossiers", "Report", READ_ONLY),
   exempt("reporting.entries", "wheat:reporting:entries", "Rechercher des écritures", "Entry", READ_ONLY),
   exempt("reporting.entry_detail", "wheat:reporting:entry-detail", "Lire le détail d'une écriture", "Entry", READ_ONLY),
   exempt("reporting.trial_balance", "wheat:reporting:trial-balance", "Calculer la balance", "Report", READ_ONLY),
@@ -404,6 +405,14 @@ export const WHEAT_WORKFLOW_REGISTRY: readonly WheatWorkflowDefinition[] = Objec
   exempt("ai.provider_test", "wheat:ai:provider:test", "Tester un fournisseur", "WheatAi", CREDENTIALS, true),
   exempt("ai.provider_preferences", "wheat:ai:provider:preferences", "Régler les préférences de fournisseur", "WheatAi", CREDENTIALS, true),
   exempt("ai.provider_models", "wheat:ai:provider:models", "Lister les modèles disponibles", "WheatAi", CREDENTIALS),
+
+  exempt("cloud.status", "wheat:cloud:status", "Lire l'état de Wheat Cloud AI", "WheatAi", CREDENTIALS),
+  exempt("cloud.authorize", "wheat:cloud:authorize", "Connecter Wheat Cloud AI", "WheatAi",
+    "Autorisation auprès du fournisseur choisi par l'utilisateur : la clé obtenue lui appartient, reste dans le coffre-fort du système et ne touche aucune donnée comptable.", true),
+  exempt("cloud.disconnect", "wheat:cloud:disconnect", "Déconnecter Wheat Cloud AI", "WheatAi", CREDENTIALS, true),
+  exempt("cloud.preferences", "wheat:cloud:preferences", "Régler la lecture des pièces par le cloud", "WheatAi", CREDENTIALS, true),
+
+  exempt("app.edition", "wheat:app:edition", "Lire l'édition de Wheat installée", "App", READ_ONLY),
 
   exempt("review.run", "wheat:review:run", "Exécuter la relecture partagée", "Review",
     "La relecture ne modifie rien : elle lit le dossier et rend un avis."),

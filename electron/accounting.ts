@@ -23,6 +23,10 @@ const CENT_FIELD_TO_MAD_FIELD: Record<string, string> = {
   amoEmployeeCents: "amoEmployee",
   irCents: "ir",
   netSalaryCents: "netSalary",
+  capitalCents: "capital",
+  foreignHtCents: "foreignHt",
+  foreignVatCents: "foreignVat",
+  foreignTtcCents: "foreignTtc",
 };
 
 export function requireId(value: unknown, label: string): string {

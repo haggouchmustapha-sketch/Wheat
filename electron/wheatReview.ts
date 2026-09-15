@@ -350,6 +350,25 @@ const REVIEWERS: Record<WheatReviewKind, (ctx: ReviewContext) => Promise<Determi
       }));
     } else confirmed.push("Format de l'ICE conforme (15 chiffres).");
 
+    // The RC and the patente are obligatory invoice mentions exactly as the ICE
+    // is, and they are read here so a review can confirm them and so the model
+    // sees them. Their content is deliberately never checked for shape: unlike
+    // the ICE neither has a single national format — the registry number is
+    // issued by a tribunal, the patente article by the commune — so a pattern
+    // here would reject valid identifiers.
+    //
+    // Their absence raises no finding, which is a deliberate choice rather than
+    // an omission. Any finding at all puts the review panel in front of the
+    // save, and a dossier is routinely opened before its RC and patente are to
+    // hand; that would make a two-step interruption of every identity save,
+    // permanently, over something the person cannot answer yet and that the
+    // identity form already names in what is still missing. The reviewer
+    // catches what would make the accounting wrong, not what is merely blank.
+    const rc = text(draft.rc, 40);
+    const patente = text(draft.patente, 40);
+    if (rc) confirmed.push(`Registre de commerce renseigné : ${rc}.`);
+    if (patente) confirmed.push(`Patente renseignée : ${patente}.`);
+
     if (vatFrequency && !["MONTHLY", "QUARTERLY"].includes(vatFrequency)) {
       findings.push(finding({ code: "COMPANY.VAT_FREQUENCY_INVALID", severity: "BLOCKER", target: "vatFrequency", title: "Le rythme de TVA est invalide.", currentValue: vatFrequency, explanation: "Wheat gère la déclaration mensuelle et la déclaration trimestrielle.", accountingReason: "Le rythme détermine le découpage des périodes de TVA et donc les dossiers de travail produits." }));
     } else if (vatFrequency) confirmed.push(`Rythme de TVA retenu : ${vatFrequency === "MONTHLY" ? "mensuel" : "trimestriel"}.`);
@@ -368,10 +387,10 @@ const REVIEWERS: Record<WheatReviewKind, (ctx: ReviewContext) => Promise<Determi
 
     return {
       findings,
-      checked: ["Raison sociale, ville et forme juridique", "Format de l'ICE", "Rythme de déclaration de TVA", "Cohérence des dates d'exercice"],
+      checked: ["Raison sociale, ville et forme juridique", "Format de l'ICE", "Registre de commerce et patente", "Rythme de déclaration de TVA", "Cohérence des dates d'exercice"],
       confirmed,
       question,
-      modelContext: { name, city: text(draft.city, 120), legalForm: text(draft.legalForm, 80), vatFrequency },
+      modelContext: { name, city: text(draft.city, 120), legalForm: text(draft.legalForm, 80), vatFrequency, rc, patente },
     };
   },
 

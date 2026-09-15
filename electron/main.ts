@@ -1,10 +1,12 @@
 ﻿import fs from "node:fs";
 import path from "node:path";
-import { app, BrowserWindow, dialog, ipcMain as electronIpcMain, safeStorage, shell } from "electron";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { app, BrowserWindow, dialog, ipcMain as electronIpcMain, net, safeStorage, shell } from "electron";
 import { fileURLToPath } from "node:url";
 import { disconnectPrisma, ensureDatabaseFile, getPrisma, migrateAndValidateDatabase, resolveDatabasePath, restoreBundledSeed } from "./database";
 import { recordProfileMigration, resolveProfileDirectory } from "./profileMigration";
-import { closeSmartOcrWorker, processSmartOcrFiles, SMART_OCR_PROGRESS_CHANNEL } from "./smartOcr";
+import { closeSmartOcrWorker, processSmartOcrFiles, resolveRecognitionPlan, SMART_OCR_PROGRESS_CHANNEL } from "./smartOcr";
+import { CloudOcrUnavailableError } from "./cloudOcr";
 import { getPaddleOcrStatus, warmPaddleOcr } from "./paddleOcr";
 import {
   createWheatBackup,
@@ -45,6 +47,7 @@ import { registerLocalSecurityIpc, type LocalSecurityService } from "./localSecu
 import { rollbackDatabaseReplacement, runBestEffortCleanup } from "./databaseRestore";
 import { registerReportingIpc } from "./reporting";
 import { registerReporting21Ipc } from "./reporting21";
+import { registerPortfolioIpc } from "./portfolio";
 import { registerFiscal21Ipc } from "./fiscal21";
 import { importDialogFilters, selectImportFile, selectImportFiles } from "./importValidation";
 import { registerWheatAiIpc } from "./wheatAi";
@@ -64,6 +67,7 @@ import { appendActivityAndAudit } from "./audit13";
 import { seedPcgeForCompany } from "./chartOfAccounts21";
 import { allocatePieceNumber, previewNextPieceNumber } from "./pieceNumbering21";
 import { WHEAT_APP_VERSION } from "../src/appVersion";
+import { WHEAT_EDITION, WHEAT_EDITION_PROFILE } from "../src/wheatEdition";
 import { readWheatEnv } from "./runtimeEnvironment";
 import {
   assertTrustedIpcSender,
@@ -133,6 +137,18 @@ const MAINTENANCE_WAIT_MS = 15_000;
 /** Released when exclusive maintenance ends, so a queued operation proceeds. */
 const maintenanceWaiters = new Set<() => void>();
 
+/**
+ * Whether the code running right now is inside an operation the gate admitted.
+ *
+ * `runExclusiveMaintenance` marks itself pending and then waits for the admitted
+ * operations to drain before it touches anything. Maintenance that is merely
+ * pending is therefore queued *behind* those operations — and an operation that
+ * waited for maintenance that is waiting for it would hold both until the bound
+ * expired. Nothing outside that bracket carries the same guarantee, so it keeps
+ * treating pending maintenance exactly as it always did.
+ */
+const admittedOperation = new AsyncLocalStorage<true>();
+
 const UNGUARDED_IPC_CHANNELS = new Set([
   "wheat:workspace:reset",
   "wheat:backup:create",
@@ -146,6 +162,15 @@ const UNGUARDED_IPC_CHANNELS = new Set([
   "wheat:update:postpone",
   "wheat:update:confirm-startup",
   "wheat:update:acknowledge",
+  /**
+   * Waiting for somebody to authorise a provider in their browser is not a
+   * business operation, and treating it as one would be a real bug: the quit
+   * path drains active operations before it closes, so an authorisation nobody
+   * finished — up to five minutes — would hold Wheat open. It is a credential
+   * lifecycle step, like the backup and restart channels above it, and it still
+   * passes the same trusted-sender check every channel does.
+   */
+  "wheat:cloud:authorize",
 ]);
 
 const ipcMain = {
@@ -196,19 +221,40 @@ async function waitForMaintenanceToFinish() {
 }
 
 /**
- * Waits out maintenance, then refuses only if it is still running.
+ * The maintenance check for a point *inside* an operation already under way.
  *
- * `assertNoMaintenance` on its own is the right check at a point where nothing
- * may be in flight, but it is the wrong one in the middle of an operation that
- * has already awaited something: maintenance that started during that await
- * turned an ordinary read into a visible refusal. Resetting the workspace
- * reloads the window, and the reload's first read could land inside the tail of
- * the reset it was triggered by — and be told to try again, for an operation
- * that was about to finish on its own.
+ * `assertNoMaintenance` on its own is the right check at the gate, where
+ * nothing of this operation exists yet. It is the wrong one once the operation
+ * has been admitted and has awaited something: a reset starting during one of
+ * those awaits turned an ordinary read into a visible refusal. Resetting the
+ * workspace reloads the window, and the reload's first read lands inside the
+ * tail of the reset that triggered it.
+ *
+ * Waiting unconditionally is equally wrong, and worse: `runExclusiveMaintenance`
+ * marks itself pending and then waits for the admitted operations to drain, so
+ * an admitted operation that waits for *pending* maintenance and maintenance
+ * that waits for that operation hold each other until the bound expires. The
+ * distinction that resolves both is `maintenancePending` against
+ * `maintenanceOperation`:
+ *
+ *   - **pending** means queued, and queued behind the operations already
+ *     running — which includes this one. Nothing has touched the database.
+ *     Carry on; maintenance is waiting for exactly this to finish.
+ *   - **running** means the database is genuinely being taken away. That is
+ *     worth waiting out, and it can only be reached from a caller that was
+ *     never admitted as a business operation, because admission and the
+ *     pending flag are both set synchronously and cannot interleave.
  */
+/** Maintenance this caller must not simply proceed through. */
+function blockingMaintenance() {
+  if (maintenanceOperation) return true;
+  return maintenancePending && !admittedOperation.getStore();
+}
+
 async function awaitMaintenanceThenAssert() {
-  await waitForMaintenanceToFinish();
-  assertNoMaintenance();
+  if (blockingMaintenance()) await waitForMaintenanceToFinish();
+  // Shutdown still refuses: no new work belongs in a closing application.
+  if (shutdownPending || blockingMaintenance()) assertNoMaintenance();
 }
 
 async function runBusinessOperation<T>(operation: () => Promise<T> | T): Promise<T> {
@@ -218,7 +264,10 @@ async function runBusinessOperation<T>(operation: () => Promise<T> | T): Promise
   assertNoMaintenance();
   activeBusinessOperations += 1;
   try {
-    return await operation();
+    // Marked for the whole operation, so an in-flight check anywhere inside it
+    // can tell "maintenance is waiting for me" from "maintenance has the
+    // database".
+    return await admittedOperation.run(true, () => operation());
   } finally {
     activeBusinessOperations -= 1;
     if (activeBusinessOperations === 0) {
@@ -747,8 +796,21 @@ if (hasSingleInstanceLock) app.whenReady().then(() => {
   }
   localSecurity = registerLocalSecurityIpc({
     ipcMain,
-    getPrisma: () => {
-      if (!allowSecurityMaintenanceAccess) assertNoMaintenance();
+    /*
+     * The local lock reads the database from the middle of other operations —
+     * `assertUnlocked()` and `touch()` are called by handlers that have already
+     * awaited several times before reaching them. A bare `assertNoMaintenance()`
+     * here is therefore the wrong check, for exactly the reason
+     * `awaitMaintenanceThenAssert` exists: a reset starting during one of those
+     * earlier awaits turned an ordinary read into a visible "réessayez dans un
+     * instant", even though the reset was milliseconds from finishing.
+     *
+     * `allowSecurityMaintenanceAccess` still opens the door for the security
+     * work a database replacement performs *inside* its own maintenance window;
+     * that path must not wait for the maintenance it is part of.
+     */
+    getPrisma: async () => {
+      if (!allowSecurityMaintenanceAccess) await awaitMaintenanceThenAssert();
       return getPrisma(app);
     },
     serialize,
@@ -759,6 +821,10 @@ if (hasSingleInstanceLock) app.whenReady().then(() => {
   const updateChannel = resolveUpdateChannel({
     isPackaged: app.isPackaged,
     localDirectory: resolveLocalUpdateDirectory(app, path.resolve(__dirname, "..")),
+    // Chromium's stack, for the same reason the provider service uses it: a
+    // machine whose TLS is inspected must still be able to find and download
+    // its updates. Verification of what arrives is unchanged.
+    fetchImpl: (url, init) => net.fetch(url, init),
   });
   updateService = new UpdateService({
     currentVersion: WHEAT_APP_VERSION,
@@ -785,6 +851,7 @@ if (hasSingleInstanceLock) app.whenReady().then(() => {
   registerWheatDossierSetupIpc(ipcMain, createWheatDossierSetupService(getAuthorizedPrisma));
   registerReportingIpc({ ipcMain, getPrisma: getAuthorizedPrisma, serialize });
   registerReporting21Ipc({ ipcMain, getPrisma: getAuthorizedPrisma, serialize });
+  registerPortfolioIpc({ ipcMain, getPrisma: getAuthorizedPrisma, serialize });
   registerFiscal21Ipc({ ipcMain, getPrisma: getAuthorizedPrisma, getActorUserId: getTrustedActorUserId, serialize });
   registerWheatAiIpc({
     ipcMain,
@@ -812,7 +879,31 @@ if (hasSingleInstanceLock) app.whenReady().then(() => {
     service: new WheatAiProviderService({
       directory: path.join(app.getPath("userData"), "wheat-ai"),
       safeStorage,
+      /*
+       * Chromium's network stack, not Node's.
+       *
+       * Node's `fetch` carries its own compiled-in list of certificate
+       * authorities and knows nothing about this computer's proxy. On an office
+       * machine whose antivirus or gateway inspects TLS — which is ordinary in
+       * the offices Wheat is for — every request it makes is presented with a
+       * certificate signed by an authority only *Windows* trusts, and it
+       * refuses the connection: `SELF_SIGNED_CERT_IN_CHAIN`, surfaced to the
+       * accountant as "check your connection" for a connection that is fine.
+       * Observed here intermittently, and it broke the authorisation exchange
+       * after the person had already authorised in their browser.
+       *
+       * `net.fetch` is the same Fetch API served by the stack the application's
+       * own windows use: the Windows certificate store, the system proxy and
+       * its credentials. Nothing is trusted that the machine does not already
+       * trust — this verifies *more* faithfully than Node did, not less.
+       */
+      fetchImpl: (url: string, init?: any) => net.fetch(url, init),
     }),
+    // The provider's authorisation page opens in the user's own browser, never
+    // inside a Wheat window: a sign-in page hosted in the application is a page
+    // the application can read. The URL is built by the authorisation flow, so
+    // the renderer cannot choose what is opened.
+    openExternal: (url) => shell.openExternal(url),
   });
   installWheatAiDiagnostics(path.join(app.getPath("userData"), "wheat-ai-diagnostics.log"));
   setWheatAiRemoteProviderService(wheatAiProviderService);
@@ -866,7 +957,10 @@ if (hasSingleInstanceLock) app.whenReady().then(() => {
   // for it — measured at roughly thirteen seconds on this repository's samples.
   // A machine without the local runtime simply carries on; the status call
   // reports why, exactly as before.
-  void warmPaddleOcr(app).catch(() => undefined);
+  // Only where that runtime is packaged. Wheat Lightweight has no local
+  // recognition pool to build, and starting one would cost several seconds of
+  // startup on exactly the machines that can least afford it.
+  if (WHEAT_EDITION_PROFILE.resource.warmLocalOcrAtStartup) void warmPaddleOcr(app).catch(() => undefined);
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -1848,20 +1942,49 @@ function registerIpc() {
       where: { companyId },
       select: { id: true, title: true, type: true, extracted: true },
     });
-    const processed = await processSmartOcrFiles(app, {
-      companyId,
-      companyName: company.name,
-      filePaths: selection.accepted,
-      existingDocuments,
-      // The dossier's own identifiers are what tell a purchase invoice from a
-      // sales invoice, and which of the two ICE numbers on the page belongs to
-      // the counterparty.
-      company: { name: company.name, ice: company.ice, taxId: company.taxId },
-      aiReview: buildDocumentAiReviewer(),
-      onProgress: (event) => {
-        if (sender && !sender.isDestroyed()) sender.send(SMART_OCR_PROGRESS_CHANNEL, { companyId, ...event });
-      },
-    });
+    /**
+     * The import, or the one thing that has to happen before it can.
+     *
+     * A Lightweight machine with no authorised provider cannot read a scan, and
+     * the accountant did not come here to configure an AI service — they came
+     * to file an invoice. So nothing is written, the selected files are handed
+     * back with the reason, and the interface asks the one question it needs
+     * and runs *this same import* again. They never re-pick the documents.
+     */
+    /** Distinct cloud problems met during this import, and what to do about each. */
+    const cloudNotices = new Map<string, string>();
+    let processed;
+    try {
+      processed = await processSmartOcrFiles(app, {
+        companyId,
+        companyName: company.name,
+        filePaths: selection.accepted,
+        existingDocuments,
+        // The dossier's own identifiers are what tell a purchase invoice from a
+        // sales invoice, and which of the two ICE numbers on the page belongs to
+        // the counterparty.
+        company: { name: company.name, ice: company.ice, taxId: company.taxId },
+        aiReview: buildDocumentAiReviewer(),
+        recognition: recognitionPlan((failure) => {
+          // One sentence per distinct problem, however many pages hit it: an
+          // exhausted allowance reported thirty times is noise, not information.
+          cloudNotices.set(failure.message, failure.remedy);
+        }),
+        onProgress: (event) => {
+          if (sender && !sender.isDestroyed()) sender.send(SMART_OCR_PROGRESS_CHANNEL, { companyId, ...event });
+        },
+      });
+    } catch (error) {
+      if (!(error instanceof CloudOcrUnavailableError)) throw error;
+      // Not an error to report — a step to complete. The selected files travel
+      // back so the very same import resumes once the connection exists.
+      return serialize({
+        documents: [],
+        rejections: selection.rejections,
+        truncated: selection.truncated,
+        cloudAuthorization: { required: true, reason: error.reason, filePaths: selection.accepted },
+      });
+    }
 
     const { createHash } = await import("node:crypto");
     const preparedDocuments = processed.map((doc) => {
@@ -1911,7 +2034,15 @@ function registerIpc() {
       return documents;
     });
 
-    return serialize({ documents: created, rejections: selection.rejections, truncated: selection.truncated });
+    return serialize({
+      documents: created,
+      rejections: selection.rejections,
+      truncated: selection.truncated,
+      // The documents were read — by the local fallback — so this is a notice,
+      // not a failure. Reported so the accountant knows their cloud reading did
+      // not run, rather than wondering later why the extraction was weaker.
+      cloudNotices: [...cloudNotices].map(([message, remedy]) => ({ message, remedy })),
+    });
   };
 
   ipcMain.handle("wheat:documents:upload", async (event, companyId: string) => smartOcrImport(companyId, undefined, event.sender));
@@ -1988,7 +2119,64 @@ function registerIpc() {
   });
 
   ipcMain.handle("wheat:smart-ocr:process", async (event, payload: { companyId: string; filePaths?: string[] }) => smartOcrImport(payload.companyId, payload.filePaths, event.sender));
-  ipcMain.handle("wheat:paddle-ocr:status", async () => serialize(await getPaddleOcrStatus(app)));
+  /**
+   * How this Wheat reads a scanned page.
+   *
+   * One answer covering both editions, so the documents screen states what is
+   * actually going to happen rather than inferring it. The historical fields
+   * still describe the local engine exactly as before; the edition fields say
+   * which engines are available at all and whether the cloud is connected.
+   */
+  ipcMain.handle("wheat:paddle-ocr:status", async () => {
+    const local = WHEAT_EDITION_PROFILE.hasBundledLocalOcr
+      ? await getPaddleOcrStatus(app)
+      : {
+        available: false,
+        local: true as const,
+        engine: "PaddleOCR" as const,
+        version: null,
+        pythonVersion: null,
+        language: "fr",
+        device: "cpu",
+        reason: "Cette édition de Wheat n'embarque pas le moteur de reconnaissance local ; la lecture des pièces utilise Wheat Cloud AI, avec Tesseract local en repli.",
+        vl16Installed: false,
+      };
+    const cloud = wheatAiProviderService?.getCloudStatus() ?? null;
+    const plan = recognitionPlan();
+    return serialize({
+      ...local,
+      edition: WHEAT_EDITION,
+      editionLabel: WHEAT_EDITION_PROFILE.label,
+      engineOrder: plan.order,
+      cloud: cloud
+        ? {
+          connected: cloud.connected,
+          documentOcrEnabled: cloud.documentOcrEnabled,
+          consentGiven: cloud.consentGiven,
+          providers: cloud.providers,
+          authorizationProvider: cloud.authorizationProvider,
+          canAuthorize: cloud.canAuthorize,
+        }
+        : null,
+    });
+  });
+
+  /**
+   * Which Wheat this is.
+   *
+   * The renderer never reads an environment variable or a file to find out: the
+   * edition is compiled into the main process, and this is the one way it
+   * crosses to the interface.
+   */
+  ipcMain.handle("wheat:app:edition", async () => serialize({
+    edition: WHEAT_EDITION,
+    label: WHEAT_EDITION_PROFILE.label,
+    summary: WHEAT_EDITION_PROFILE.summary,
+    version: WHEAT_APP_VERSION,
+    visualProfile: WHEAT_EDITION_PROFILE.visualProfile,
+    hasBundledLocalOcr: WHEAT_EDITION_PROFILE.hasBundledLocalOcr,
+    cloudOcrByDefault: WHEAT_EDITION_PROFILE.cloudOcrByDefault,
+  }));
 
   ipcMain.handle("wheat:document:update-extraction", async (_event, payload: { documentId: string; type?: string; fields?: Record<string, unknown>; tags?: string }) => updateDocumentExtraction(null, payload));
 
@@ -2666,6 +2854,30 @@ async function describeReviewModel(): Promise<WheatReviewModelDescriptor> {
   }
 }
 
+/**
+ * Who reads a scanned page for this build, right now.
+ *
+ * Resolved per import rather than once at startup, because the two inputs can
+ * both change while Wheat is running: the user may connect Wheat Cloud AI, or
+ * turn cloud reading off. The edition decides only whether a local engine is
+ * packaged at all, which is compiled in and cannot change.
+ */
+function recognitionPlan(onCloudFailure?: (failure: { message: string; remedy: string }) => void) {
+  const preferences = wheatAiProviderService?.getPreferences();
+  return {
+    ...resolveRecognitionPlan({
+    cloud: wheatAiProviderService
+      ? {
+        runtime: wheatAiProviderService.cloudOcrRuntime(),
+        enabled: preferences?.cloudDocumentOcr ?? WHEAT_EDITION_PROFILE.cloudOcrByDefault,
+        consentGiven: preferences?.cloudDocumentOcrConsent ?? false,
+      }
+      : null,
+    }),
+    onCloudFailure,
+  };
+}
+
 function buildDocumentAiReviewer() {
   const preferences = wheatAiProviderService?.getPreferences();
   const modelId = preferences?.documentAiReviewModelId;
@@ -2786,6 +2998,7 @@ async function rerunDocumentOcr(expectedCompanyId: string | null, documentId: st
     existingDocuments: [],
     company: { name: company.name, ice: company.ice, taxId: company.taxId },
     aiReview: buildDocumentAiReviewer(),
+    recognition: recognitionPlan(),
   });
   if (!processed) throw new Error("La reconnaissance n'a produit aucun résultat pour ce document.");
 

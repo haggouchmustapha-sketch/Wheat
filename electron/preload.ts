@@ -41,6 +41,7 @@ const wheat = {
   },
   setBankLedgerAccount: (payload: unknown) => ipcRenderer.invoke("wheat:bank:account:set-ledger", payload),
   createBankLedgerAccount: (payload: unknown) => ipcRenderer.invoke("wheat:bank:account:create-ledger", payload),
+  getPortfolioOverview: () => ipcRenderer.invoke("wheat:portfolio:overview"),
   queryReportEntries: (payload: unknown) => ipcRenderer.invoke("wheat:reporting:entries", payload),
   getReportEntryDetail: (payload: unknown) => ipcRenderer.invoke("wheat:reporting:entry-detail", payload),
   getTrialBalance: (payload: unknown) => ipcRenderer.invoke("wheat:reporting:trial-balance", payload),
@@ -238,6 +239,8 @@ const wheat = {
   },
   smartOcrProcess: (payload: unknown) => ipcRenderer.invoke("wheat:smart-ocr:process", payload),
   getPaddleOcrStatus: () => ipcRenderer.invoke("wheat:paddle-ocr:status"),
+  /** Which Wheat edition is installed. Compiled in, never guessed. */
+  getAppEdition: () => ipcRenderer.invoke("wheat:app:edition"),
   updateDocumentExtraction: (payload: unknown) => ipcRenderer.invoke("wheat:document:update-extraction", payload),
   deleteDocument: (documentId: string) => ipcRenderer.invoke("wheat:document:delete", documentId),
   postDocumentEntry: (documentId: string, kind?: "SALE" | "PURCHASE") => ipcRenderer.invoke("wheat:document:create-invoice-draft", documentId, kind),
@@ -283,6 +286,15 @@ const wheat = {
   testWheatAiProvider: (payload: unknown) => ipcRenderer.invoke("wheat:ai:provider:test", payload),
   setWheatAiProviderPreferences: (payload: unknown) => ipcRenderer.invoke("wheat:ai:provider:preferences", payload),
   listWheatAiProviderModels: (payload?: unknown) => ipcRenderer.invoke("wheat:ai:provider:models", payload),
+
+  // --- Wheat Cloud AI ------------------------------------------------------
+  // The simple surface an accountant sees: is it connected, connect it,
+  // disconnect it. The authorisation happens entirely in the main process and
+  // the user's own browser; no credential ever crosses back through here.
+  getCloudStatus: () => ipcRenderer.invoke("wheat:cloud:status"),
+  authorizeCloud: () => ipcRenderer.invoke("wheat:cloud:authorize"),
+  disconnectCloud: () => ipcRenderer.invoke("wheat:cloud:disconnect"),
+  setCloudPreferences: (payload: unknown) => ipcRenderer.invoke("wheat:cloud:preferences", payload),
 };
 
 contextBridge.exposeInMainWorld("wheat", wheat);

@@ -224,10 +224,32 @@ npm run test:ocr
 
 The build outputs are `dist\` and `dist-electron\`.
 
+## Editions
+
+Wheat ships as one product in two editions, built from this one source tree:
+
+| | Standard | Lightweight |
+|---|---|---|
+| Accounting features, database, dossier format, version | identical | identical |
+| Reads a scanned page | locally (PaddleOCR) | in the cloud, with the user's own provider |
+| Installer | ~1334 MB | ~293 MB |
+| Installed footprint | ~3149 MB, 27 457 files | ~1074 MB, 402 files |
+| Interface | full motion, blur, depth | economical profile |
+
+The edition selects **execution strategy, packaging and presentation**, never
+accounting. `src/wheatEdition.ts` is the source of truth and the value is
+compiled into the build. Full detail: **`docs/wheat-editions.md`**.
+
 ## Build Windows artifacts
 
 ```powershell
-npm run installer
+npm run build:standard        # renderer + main, compiled as Standard
+npm run build:lightweight
+
+npm run dist:standard         # db:reset, icon, build, package
+npm run dist:lightweight
+
+npm run installer             # unchanged; produces Standard
 npm run portable
 npm run pack
 ```
@@ -235,10 +257,15 @@ npm run pack
 Expected outputs:
 
 ```text
-release\2.0.0\WheatSetup-2.0.0.exe
-release\2.0.0\WheatPortable-2.0.0.exe
-release\2.0.0\win-unpacked\
+release\2.7.0\Wheat-Standard-2.7.0-Setup.exe
+release\2.7.0\Wheat-Lightweight-2.7.0-Setup.exe
+release\2.7.0\win-unpacked\
 ```
+
+Both editions share one `appId`, one `productName`, one install directory and
+one `%APPDATA%\Wheat\`, so installing the other edition over this one is an
+ordinary in-place upgrade that keeps the dossier, the documents, the backups and
+the settings.
 
 `package.json.version` is the single product-version source of truth. Electron, About, updater metadata, and artifact names derive the SemVer `2.0.0` from it; Windows may represent the file version with a padded fourth component internally.
 
@@ -253,9 +280,14 @@ Locally generated executables are not code-signed, so Windows SmartScreen may re
 3. Build the NSIS installer and generate the local feed:
 
 ```powershell
-npm run installer
+npm run dist:standard
 npm run update:package -- --notes-file docs\wheat-2.0-release-notes.md --minimum-version 2.0.0
 ```
+
+A local feed serves one edition; `--edition lightweight` (after
+`npm run dist:lightweight`) rehearses the other. A development build of one
+edition reading a feed that publishes only the other finds nothing to install,
+which is the intended behaviour: Wheat never crosses editions during an update.
 
 `--minimum-version` is optional. Notes can alternatively be passed with repeated `--note "..."` arguments. Use `--no-publish` to create only the repository feed, `--output <directory>` for an alternate repository/test feed, or set `WHEAT_LOCAL_UPDATE_DIR` for the installed-app feed. Replacing different bytes for an already-published version is refused unless `--force` is explicitly supplied; publishing a new version is preferred.
 
@@ -265,7 +297,7 @@ The command calculates SHA-256 and creates:
 updates\
   latest.json
   2.2.0\
-    WheatSetup-2.2.0.exe
+    Wheat-Standard-2.2.0-Setup.exe
     release.json
 ```
 

@@ -232,6 +232,21 @@ async function updateCompany(options: Operations13Options, payloadValue: unknown
   const city = requireText(payload.city, "La ville", 120);
   const vatFrequency = payload.vatFrequency === "QUARTERLY" ? "QUARTERLY" : payload.vatFrequency === "MONTHLY" ? "MONTHLY" : null;
   if (!vatFrequency) throw new Error("La fréquence TVA est invalide.");
+  // RC, patente and the CNSS affiliation are mentions a Moroccan invoice and
+  // the declarations carry, but their formats are set by the registry, the
+  // commune and the CNSS respectively and vary by dossier, so they are only
+  // length-capped: inventing a shape here would reject valid identifiers.
+  const rc = optionalText(payload.rc, 40);
+  const rcTribunal = optionalText(payload.rcTribunal, 120);
+  const patente = optionalText(payload.patente, 40);
+  const cnssAffiliation = optionalText(payload.cnssAffiliation, 40);
+  const address = optionalText(payload.address, 240);
+  const phone = optionalText(payload.phone, 40);
+  const email = optionalText(payload.email, 160);
+  const activitySector = optionalText(payload.activitySector, 160);
+  const capitalCents = payload.capitalCents === undefined || payload.capitalCents === null || payload.capitalCents === ""
+    ? null
+    : exactCents(payload.capitalCents, "Le capital social");
   const prisma = await options.getPrisma();
   const actorUserId = await actorId(options);
   return prisma.$transaction(async (tx: PrismaLike) => {
@@ -239,7 +254,11 @@ async function updateCompany(options: Operations13Options, payloadValue: unknown
     if (!current) throw new Error("La société n'existe plus.");
     const result = await tx.company.updateMany({
       where: { id: companyId, version: expectedVersion },
-      data: { name, legalForm, ice, taxId, city, vatFrequency, version: { increment: 1 } },
+      data: {
+        name, legalForm, ice, taxId, city, vatFrequency,
+        rc, rcTribunal, patente, cnssAffiliation, address, phone, email, activitySector, capitalCents,
+        version: { increment: 1 },
+      },
     });
     if (result.count !== 1) throw new Error("Cette société a été modifiée ailleurs. Actualisez avant de réessayer.");
     const updated = await tx.company.findUniqueOrThrow({ where: { id: companyId } });
@@ -250,7 +269,11 @@ async function updateCompany(options: Operations13Options, payloadValue: unknown
       entityType: "Company",
       entityId: companyId,
       description: `Paramètres de ${name} mis à jour`,
-      payload: { beforeVersion: current.version, afterVersion: updated.version, name, legalForm, ice, taxId, city, vatFrequency },
+      payload: {
+        beforeVersion: current.version, afterVersion: updated.version,
+        name, legalForm, ice, taxId, city, vatFrequency,
+        rc, rcTribunal, patente, cnssAffiliation, address, phone, email, activitySector, capitalCents,
+      },
     });
     return updated;
   });

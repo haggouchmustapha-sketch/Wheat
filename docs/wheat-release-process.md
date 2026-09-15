@@ -53,10 +53,11 @@ In order it:
 2. reads what is already published and refuses a version that exists or is not newer;
 3. reads the release notes — an accountant reads these, so they are written, never generated from commits;
 4. runs `npm run lint` and `npm run test:updater`;
-5. runs `npm run installer` (electron-builder, NSIS, x64);
-6. writes and signs `latest.json`;
-7. re-hashes the installer and **verifies the signature against the public key compiled into this build** — signing with the wrong key would otherwise publish a release every client silently refuses;
-8. writes `release/<version>/publish-plan.json` and prints exactly what would be uploaded.
+5. runs `npm run dist:standard` **and** `npm run dist:lightweight` — one source revision, both editions, one version, built in sequence from this working tree so a release can never mix commits;
+6. writes and signs `latest.json`, including the per-edition installer map and its own signature;
+7. re-hashes both installers and **verifies both signatures against the public key compiled into this build** — signing with the wrong key would otherwise publish a release every client silently refuses;
+8. writes `release/<version>/wheat-website-release.json`, the one file the website needs to offer this release;
+9. writes `release/<version>/publish-plan.json` and prints exactly what would be uploaded.
 
 Useful flags: `--minimum-version <semver>`, `--skip-build` (reuse an installer),
 `--skip-tests` (recorded in the plan; **publish then refuses it**).
@@ -75,6 +76,7 @@ publish are separated by however long you spent reading the plan:
 - the release is signed;
 - every asset still matches its prepared size and SHA-256;
 - the manifest names the installer it hashes, and its signature verifies against the key compiled into Wheat;
+- the manifest publishes **both** editions, its editions map is signed, and each edition's named installer is among the prepared assets with a matching digest — a release that named two editions and published one would leave half the installed base downloading a file that is not there;
 - `gh` is authenticated;
 - the tag does not exist, and the version is newer than everything published.
 
@@ -90,9 +92,23 @@ Any failure stops before anything is uploaded.
 
 | File | Purpose | Read by |
 |---|---|---|
-| `WheatSetup-<version>.exe` | The NSIS installer. | Wheat's updater; a person doing a first install. |
-| `latest.json` | The signed manifest: version, date, notes, artifact name, SHA-256, size, Ed25519 signature. | Wheat's updater, first, before anything else. |
-| `WheatSetup-<version>.exe.blockmap` | electron-builder's block map. **Not** read by Wheat's updater; published so the installer can be diffed and verified externally. | Nothing in Wheat. |
+| `Wheat-Standard-<version>-Setup.exe` | The Standard NSIS installer. | Wheat Standard's updater; a person choosing Standard on the website. |
+| `Wheat-Lightweight-<version>-Setup.exe` | The Lightweight NSIS installer. | Wheat Lightweight's updater; a person choosing Lightweight on the website. |
+| `latest.json` | The signed manifest: version, date, notes, artifact name, SHA-256, size, Ed25519 signature, plus the per-edition installer map and its own signature. | Wheat's updater, first, before anything else. |
+| `*.exe.blockmap` | electron-builder's block maps. **Not** read by Wheat's updater; published so an installer can be diffed and verified externally. | Nothing in Wheat. |
+
+Both editions are **one release with one version**. The edition is a word in the
+file name and a key in the manifest, never a separate version number.
+
+`latest.json`'s top-level `artifact`/`sha256` stay the **Standard** installer.
+That is what every Wheat released before editions existed reads, so those
+installs keep updating — to Standard, which is what they are. A build that needs
+a different artifact reads `editions` and refuses the release if its own edition
+is not in it; it never falls back to the top-level one.
+
+Not published to the release: `wheat-website-release.json`. It stays local and is
+applied to the website with `node sync-release.mjs` — see
+`docs/wheat-editions.md`.
 
 Wheat does not use `latest.yml`: that is electron-updater's format, and Wheat
 has its own signed manifest instead (see below).
@@ -101,28 +117,39 @@ has its own signed manifest instead (see below).
 
 ## Artifact size
 
-The installer is currently **~1.3 GB**, and almost all of it is
-`resources/paddleocr` — an embedded Python runtime plus OCR models, ~2.1 GB on
-disk, pulled in wholesale by the `extraResources` entry in `package.json`.
+Measured on this repository at 2.1.2609082:
 
-That was tolerable when Wheat was installed from a USB stick. It is a different
-proposition now that the same file is the *update* payload: every accountant
-downloads it in full for every release, over whatever connection they have, and
-GitHub's per-asset ceiling is 2 GB — so there is not much headroom left either.
+| Edition | Installer | Difference |
+|---|---|---|
+| Standard | 1 399 314 783 bytes (~1334 MB) | — |
+| Lightweight | 307 208 736 bytes (~293 MB) | **−78 %** |
 
-Nothing in the update path works around this, and deliberately so: Wheat
-verifies whole artifacts, and a delta scheme would be a new trust surface. The
-fix belongs in packaging, not in the updater. Worth considering, roughly in
-order of payoff:
+Almost the whole of that difference is `resources/paddleocr`: an embedded Python
+runtime plus recognition models, ~2.08 GB across ~27 000 files on disk, pulled in
+wholesale by one `extraResources` entry. Lightweight does not package it and
+reads scanned pages in the cloud instead.
 
-- ship PaddleOCR as an optional component downloaded on first use, rather than
-  inside the installer — Tesseract already covers the default OCR path;
-- prune the bundled Python runtime (`pip`, `setuptools` and their vendored
-  binaries are packaged today and are not needed at runtime);
-- keep the OCR models but drop the ones for languages Wheat does not offer.
+Standard's size matters more than it used to, because the same file is the
+*update* payload: every accountant on Standard downloads it in full for every
+release, and GitHub's per-asset ceiling is 2 GB, so there is not much headroom
+left either.
 
-Until then, expect a long upload during `release:publish` and tell users that
-the first update is a large download.
+Nothing in the update path works around this, and deliberately so: Wheat verifies
+whole artifacts, and a delta scheme would be a new trust surface. The fix belongs
+in packaging. Worth considering, roughly in order of payoff:
+
+- offer PaddleOCR to **Lightweight** as an optional pack downloaded on first use.
+  The architecture already allows it: `ocrEngineOrder()` puts `paddle` first
+  whenever a local runtime is present, so such a pack changes one capability flag
+  and nothing else;
+- prune the bundled Python runtime in Standard (`pip`, `setuptools` and their
+  vendored binaries are packaged today and are not needed at runtime);
+- keep the recognition models but drop the ones for languages Wheat does not
+  offer.
+
+Until then, expect a long upload during `release:publish` for the Standard
+installer, and tell Standard users that the first update is a large download.
+Lightweight users are no longer in that position at all.
 
 ## Security
 

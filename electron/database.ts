@@ -19,6 +19,7 @@ import invoiceOptionalDueDateMigrationSql from "../prisma/migrations/20260831120
 import guidedWorkMigrationSql from "../prisma/migrations/20260901140000_wheat_guided_work/migration.sql?raw";
 import formDraftsMigrationSql from "../prisma/migrations/20260902100000_wheat_form_drafts/migration.sql?raw";
 import sageThirdPartyMigrationSql from "../prisma/migrations/20260902160000_sage_third_party_accounts/migration.sql?raw";
+import moroccanIdentityMigrationSql from "../prisma/migrations/20260908120000_moroccan_identity_fields/migration.sql?raw";
 import { resolveProfileDatabaseFile } from "./profileMigration";
 import { readWheatEnv } from "./runtimeEnvironment";
 
@@ -120,6 +121,11 @@ const migrations: Migration[] = [
     name: "20260902160000_sage_third_party_accounts",
     sql: sageThirdPartyMigrationSql,
     checksum: "3d42ccf01d3d26cc042d2399897b35085d3d66faa49ccc9be229013669cc6767",
+  },
+  {
+    name: "20260908120000_moroccan_identity_fields",
+    sql: moroccanIdentityMigrationSql,
+    checksum: "67977f2f4a4341265b459aae18c6ebc760eee771e004d2366fc21ac26e30dc3e",
   },
 ];
 

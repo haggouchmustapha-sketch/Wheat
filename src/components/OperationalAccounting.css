@@ -561,6 +561,30 @@
   grid-column: span 2;
 }
 
+/* A yes/no field reads as one line, so the box sits beside its label rather
+   than under it like the stacked text fields above. */
+.op-field--check {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  align-self: end;
+  min-height: var(--control-height);
+}
+
+.op-field--check > input {
+  flex: none;
+  margin: 0;
+}
+
+/* The label text is the only part of this row that can give way, so it has to
+   be allowed to: a flex item defaults to `min-width: auto` and refuses to
+   shrink below its content, which pushed "Assujetti a la TVA" past its grid
+   cell and out of the window at 125% zoom. Shrinking lets it wrap instead. */
+.op-field--check > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .op-field > span,
 .op-compact-select > span {
   color: var(--op-muted);
@@ -1307,7 +1331,7 @@
   border-bottom: 1px solid var(--op-line);
   padding: 12px 16px;
   background: var(--surface-soft);
-  backdrop-filter: blur(8px);
+  backdrop-filter: blur(var(--blur-panel));
 }
 
 .op-inspector__head > div {

@@ -403,7 +403,7 @@
      of its height on empty scrim. */
   padding: clamp(var(--space-6), 10vh, 132px) var(--space-6) var(--space-6);
   background: var(--scrim);
-  backdrop-filter: blur(2px);
+  backdrop-filter: blur(var(--blur-scrim));
 }
 
 .wt-palette {

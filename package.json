@@ -1,7 +1,7 @@
 {
   "name": "wheat",
   "private": true,
-  "version": "2.1.2609082",
+  "version": "2.1.2609151",
   "description": "Wheat — free, local-first desktop accounting for Moroccan businesses.",
   "author": "Wheat",
   "license": "GPL-3.0-or-later",
@@ -15,7 +15,12 @@
     "dev": "npm run prisma:generate && vite --host 127.0.0.1",
     "clean": "node scripts/clean-build.mjs",
     "build": "npm run clean && npm run prisma:generate && tsc -b && vite build",
+    "build:standard": "cross-env WHEAT_EDITION=standard npm run build",
+    "build:lightweight": "cross-env WHEAT_EDITION=lightweight npm run build",
     "installer": "npm run db:reset && npm run icon:ico && npm run build && electron-builder --win nsis --x64",
+    "dist:edition": "npm run db:reset && npm run icon:ico && npm run build && node scripts/package-edition.mjs",
+    "dist:standard": "cross-env WHEAT_EDITION=standard npm run dist:edition",
+    "dist:lightweight": "cross-env WHEAT_EDITION=lightweight npm run dist:edition",
     "portable": "npm run db:reset && npm run icon:ico && npm run build && electron-builder --win portable --x64",
     "pack": "npm run db:reset && npm run icon:ico && npm run build && electron-builder --dir",
     "update:package": "node scripts/package-update.mjs",
@@ -97,7 +102,7 @@
   "build": {
     "appId": "ma.atlasledger.desktop",
     "productName": "Wheat",
-    "artifactName": "WheatSetup-${version}.${ext}",
+    "artifactName": "Wheat-Standard-${version}-Setup.exe",
     "directories": {
       "output": "release/${version}"
     },

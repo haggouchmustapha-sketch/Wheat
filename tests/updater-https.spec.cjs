@@ -479,3 +479,37 @@ test("a packaged build ignores an update source from the environment", () => {
   expect(channel.provider.name).toBe("github");
   expect(channel.source).toMatchObject(updater.WHEAT_RELEASE_REPOSITORY);
 });
+
+test("the online channels reach the network through the transport the main process supplies", async () => {
+  /*
+   * The main process hands the channel Chromium's fetch, so an update is found
+   * and downloaded using this computer's certificate store and proxy. Node's
+   * own fetch carries a compiled-in authority list and no proxy, so on an
+   * office machine whose TLS is inspected every update attempt failed on a
+   * certificate only Windows trusts. What arrives is verified exactly as
+   * before; only the route changes, and this asserts the route is actually
+   * taken rather than silently falling back to the global fetch.
+   */
+  const seen = [];
+  const fetchImpl = async (url) => {
+    seen.push(String(url));
+    return { ok: false, status: 503, headers: new Map(), text: async () => "", json: async () => ({}) };
+  };
+
+  const github = updater.resolveUpdateChannel({ isPackaged: true, localDirectory: os.tmpdir(), env: {}, fetchImpl });
+  expect(github.provider.name).toBe("github");
+  await github.provider.getLatestRelease().catch(() => undefined);
+
+  const https = updater.resolveUpdateChannel({
+    isPackaged: false,
+    localDirectory: os.tmpdir(),
+    env: { WHEAT_UPDATE_FEED_URL: FEED, WHEAT_UPDATE_PUBLIC_KEY: keyPair().publicPem },
+    fetchImpl,
+  });
+  expect(https.provider.name).toBe("https");
+  await https.provider.getLatestRelease().catch(() => undefined);
+
+  expect(seen.length, "both online providers must use the supplied transport").toBeGreaterThanOrEqual(2);
+  expect(seen.some((url) => url.includes("github.com"))).toBe(true);
+  expect(seen.some((url) => url.startsWith(FEED))).toBe(true);
+});

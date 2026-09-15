@@ -1,6 +1,7 @@
 export * from "./types";
 export * from "./validation";
 export * from "./signature";
+export * from "./edition";
 export * from "./releaseSource";
 export * from "./releaseTransport";
 export * from "./localProvider";

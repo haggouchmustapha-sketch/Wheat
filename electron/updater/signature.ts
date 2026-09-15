@@ -51,6 +51,32 @@ export function canonicalReleasePayload(release: UpdateRelease): string {
   ]);
 }
 
+/**
+ * The exact bytes an editions signature covers.
+ *
+ * Bound to the release version, so a signed editions map cannot be lifted off
+ * one release and pasted onto another. Editions are emitted in sorted order and
+ * every field is length-delimited by JSON's own escaping, exactly like the
+ * payload above, so signing and verifying cannot disagree about ordering.
+ *
+ * `scripts/lib/releaseManifest.mjs` reimplements this; a test signs with one
+ * and verifies with the other so the two cannot drift apart.
+ */
+export function canonicalEditionsPayload(release: Pick<UpdateRelease, "version" | "editions">): string {
+  const editions = release.editions ?? {};
+  return JSON.stringify([
+    "wheat-editions",
+    1,
+    release.version,
+    Object.keys(editions).sort().map((edition) => [
+      edition,
+      editions[edition].artifact.replaceAll("\\", "/"),
+      editions[edition].sha256.toLowerCase(),
+      editions[edition].artifactSize ?? null,
+    ]),
+  ]);
+}
+
 export class UpdateSignatureError extends Error {
   constructor(message: string, options?: ErrorOptions) {
     super(message, options);
@@ -77,15 +103,7 @@ export function verifyReleaseSignature(release: UpdateRelease, publicKeyPem: str
     throw new UpdateSignatureError(`Unsupported update signature algorithm: ${release.signature.algorithm}.`);
   }
 
-  let key: ReturnType<typeof createPublicKey>;
-  try {
-    key = createPublicKey(publicKeyPem);
-  } catch (error) {
-    throw new UpdateSignatureError("The configured Wheat release signing key could not be read.", { cause: error });
-  }
-  if (key.asymmetricKeyType !== "ed25519") {
-    throw new UpdateSignatureError("The configured Wheat release signing key is not an Ed25519 key.");
-  }
+  const key = readReleaseKey(publicKeyPem);
 
   let signatureBytes: Buffer;
   try {
@@ -104,6 +122,49 @@ export function verifyReleaseSignature(release: UpdateRelease, publicKeyPem: str
   if (!verify(null, payload, key, signatureBytes)) {
     throw new UpdateSignatureError(`Update ${release.version} failed signature verification and was rejected.`);
   }
+}
+
+/**
+ * Verifies the per-edition installer map against the pinned release key.
+ *
+ * Separate from `verifyReleaseSignature` because the two answer different
+ * questions and are needed at different moments: the first authorises acting on
+ * the release at all, this one authorises downloading *these particular bytes*
+ * for *this* edition. A release whose editions map is present but unsigned is
+ * refused on the same reasoning as an unsigned manifest — stripping a signature
+ * is the cheapest forgery there is.
+ */
+export function verifyEditionsSignature(release: UpdateRelease, publicKeyPem: string | null): void {
+  if (!release.editions) throw new UpdateSignatureError("This update publishes no per-edition installers.");
+  if (!publicKeyPem) {
+    throw new UpdateSignatureError("No Wheat release signing key is configured, so the edition installers cannot be verified.");
+  }
+  if (!release.editionsSignature) {
+    throw new UpdateSignatureError("The per-edition installers of this update are not signed and were rejected.");
+  }
+  if (release.editionsSignature.algorithm.trim().toLowerCase() !== UPDATE_SIGNATURE_ALGORITHM) {
+    throw new UpdateSignatureError(`Unsupported update signature algorithm: ${release.editionsSignature.algorithm}.`);
+  }
+  const key = readReleaseKey(publicKeyPem);
+  const signatureBytes = Buffer.from(release.editionsSignature.value, "base64");
+  if (signatureBytes.length !== 64) throw new UpdateSignatureError("The update edition signature is malformed.");
+  const payload = Buffer.from(canonicalEditionsPayload(release), "utf8");
+  if (!verify(null, payload, key, signatureBytes)) {
+    throw new UpdateSignatureError(`The per-edition installers of update ${release.version} failed signature verification and were rejected.`);
+  }
+}
+
+function readReleaseKey(publicKeyPem: string) {
+  let key: ReturnType<typeof createPublicKey>;
+  try {
+    key = createPublicKey(publicKeyPem);
+  } catch (error) {
+    throw new UpdateSignatureError("The configured Wheat release signing key could not be read.", { cause: error });
+  }
+  if (key.asymmetricKeyType !== "ed25519") {
+    throw new UpdateSignatureError("The configured Wheat release signing key is not an Ed25519 key.");
+  }
+  return key;
 }
 
 /**

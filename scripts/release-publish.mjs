@@ -3,7 +3,8 @@ import path from "node:path";
 import semver from "semver";
 import { createPublicKey, verify } from "node:crypto";
 import { RELEASE_MANIFEST_ASSET, canonicalEditionsPayload, canonicalReleasePayload, hashFile, releaseTagFor } from "./lib/releaseManifest.mjs";
-import { WHEAT_EDITIONS } from "./lib/wheatEditions.mjs";
+import { WHEAT_EDITIONS, editionArtifactPaths } from "./lib/wheatEditions.mjs";
+import { buildSigningReport } from "./lib/wheatSigning.mjs";
 import { RELEASE_BRANCH, gh, ghIsAuthenticated, ghJson, readPackageMetadata, readSourceProvenance, remoteBranchHead, repositoryRoot, resolveReleaseRepository } from "./lib/releaseRepository.mjs";
 
 /**
@@ -29,7 +30,7 @@ const values = new Map();
 const flags = new Set();
 for (let index = 0; index < args.length; index += 1) {
   const argument = args[index];
-  if (argument === "--draft" || argument === "--allow-unsigned") flags.add(argument);
+  if (argument === "--draft" || argument === "--allow-unsigned" || argument === "--allow-unsigned-windows") flags.add(argument);
   else if (argument === "--version") {
     const value = args[++index]?.trim();
     if (!value) throw new Error("--version requires a value.");
@@ -132,6 +133,42 @@ if (manifest.signature) {
     if (asset.sha256 !== String(entry.sha256).toLowerCase()) refuse(`the manifest digest for the ${edition} edition does not match the installer it names.`);
     console.log(`  ${edition.padEnd(12)} ${named}  signed and matched`);
   }
+}
+
+// ------------------------------------------------ 5b. Windows Authenticode
+//
+// Read again from the files on disk, not from the plan: the plan records what
+// was true when the release was prepared, and the point of this script is to
+// assume nothing that old.
+//
+// This is the Windows *publisher* signature, checked after the Ed25519 manifest
+// signature above rather than instead of it. They answer different questions —
+// who published these bytes, and whether Wheat itself vouches for this release —
+// and a release needs both. The order is deliberate: a release that is
+// internally incoherent is reported as that first, because it is the worse
+// fault.
+step("Windows Authenticode");
+const windowsSigning = buildSigningReport(root, version, {
+  fileNames: editionArtifactPaths(root, version).map((entry) => entry.fileName),
+});
+console.log(`  Windows signing mode: ${windowsSigning.mode}`);
+for (const artifact of windowsSigning.artifacts) {
+  console.log(`    ${artifact.role.padEnd(18)} ${artifact.summary}`);
+}
+if (windowsSigning.mode !== "off" && windowsSigning.verdict !== "PASS") {
+  refuse(`Windows code signing is configured but the artifacts do not verify: ${windowsSigning.failure}`);
+}
+if (windowsSigning.mode === "off" && !flags.has("--allow-unsigned-windows")) {
+  refuse(
+    "these installers carry no Windows Authenticode signature, so Windows will present Wheat as coming from an " +
+    "\"Unknown publisher\" and Smart App Control may refuse to run them at all. Configure WHEAT_SIGNING_MODE and " +
+    "re-run release:prepare (see docs/wheat-code-signing.md), or publish deliberately with --allow-unsigned-windows.",
+  );
+}
+if (windowsSigning.mode === "off") {
+  console.log("  Windows Authenticode: ABSENT — publishing anyway because --allow-unsigned-windows was passed.");
+} else if (windowsSigning.publishers.length) {
+  console.log(`  Windows publisher: ${windowsSigning.publishers.join(", ")}`);
 }
 
 // ------------------------------------------------------- 6. remote state

@@ -17,14 +17,15 @@
     "build": "npm run clean && npm run prisma:generate && tsc -b && vite build",
     "build:standard": "cross-env WHEAT_EDITION=standard npm run build",
     "build:lightweight": "cross-env WHEAT_EDITION=lightweight npm run build",
-    "installer": "npm run db:reset && npm run icon:ico && npm run build && electron-builder --win nsis --x64",
-    "dist:edition": "npm run db:reset && npm run icon:ico && npm run build && node scripts/package-edition.mjs",
+    "installer": "npm run seed:build && npm run icon:ico && npm run build && electron-builder --win nsis --x64",
+    "dist:edition": "npm run seed:build && npm run icon:ico && npm run build && node scripts/package-edition.mjs",
     "dist:standard": "cross-env WHEAT_EDITION=standard npm run dist:edition",
     "dist:lightweight": "cross-env WHEAT_EDITION=lightweight npm run dist:edition",
-    "portable": "npm run db:reset && npm run icon:ico && npm run build && electron-builder --win portable --x64",
-    "pack": "npm run db:reset && npm run icon:ico && npm run build && electron-builder --dir",
+    "portable": "npm run seed:build && npm run icon:ico && npm run build && electron-builder --win portable --x64",
+    "pack": "npm run seed:build && npm run icon:ico && npm run build && electron-builder --dir",
     "update:package": "node scripts/package-update.mjs",
     "update:keygen": "node scripts/generate-update-key.mjs",
+    "sign:verify": "node scripts/verify-signatures.mjs",
     "release:prepare": "node scripts/release-prepare.mjs",
     "release:publish": "node scripts/release-publish.mjs",
     "test:desktop": "npm run db:reset && npm run build && playwright test tests/electron-smoke.spec.cjs --reporter=line",
@@ -36,6 +37,7 @@
     "db:push": "prisma db push",
     "db:seed": "tsx prisma/seed.ts",
     "db:reset": "prisma migrate reset --force --skip-seed && npm run db:seed",
+    "seed:build": "node scripts/build-seed-database.mjs",
     "icon:ico": "tsx scripts/make-icon.ts",
     "lint": "eslint .",
     "preview": "vite preview",
@@ -114,7 +116,8 @@
         "from": "node_modules/.prisma",
         "to": "node_modules/.prisma",
         "filter": [
-          "**/*"
+          "**/*",
+          "!**/*.node.tmp*"
         ]
       },
       "node_modules/@prisma/**",
@@ -214,7 +217,7 @@
     ],
     "extraResources": [
       {
-        "from": "prisma/dev.db",
+        "from": "build/wheat-seed.db",
         "to": "seed/wheat-seed.db"
       },
       {

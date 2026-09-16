@@ -10,6 +10,8 @@
  * ("pick this counterparty") without caring which control renders it.
  */
 
+const { waitForWheatWindow } = require("./wheat-electron-harness.cjs");
+
 /**
  * Selects a value in either a Wheat combobox or a native `<select>`.
  *
@@ -142,7 +144,8 @@ async function openDossierForWork(page, { reload = true, companyId: target = nul
   }, target);
   if (reload) {
     await page.reload();
-    await page.waitForFunction(() => Boolean(window.wheat), null, { timeout: 20000 });
+    // The bridge comes back before the document does; see `waitForWheatWindow`.
+    await waitForWheatWindow(page);
   }
 }
 

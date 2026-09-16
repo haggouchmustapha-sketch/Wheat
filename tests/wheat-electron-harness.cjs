@@ -48,12 +48,41 @@ async function waitForCdp(port, expected, timeout = 30000) {
   throw new Error(`CDP endpoint did not become ${expected ? "available" : "unavailable"}.`);
 }
 
+/**
+ * Waits until a page is a *rendered* Wheat window, not merely a window that has
+ * the bridge.
+ *
+ * `window.wheat` is the wrong signal on its own, and it was the source of a real
+ * intermittent failure. `preload.cjs` is attached to the **window**, so Electron
+ * runs it for the window's initial empty document and again for every document
+ * after it — before `DOMContentLoaded`, and before `loadFile()` has committed
+ * the application document at all. Waiting on the bridge therefore returns a
+ * page that is about to be replaced, and everything the spec does next races
+ * that replacement. Under load, where the commit lands late, the race is lost
+ * and Playwright reports "Execution context was destroyed, most likely because
+ * of a navigation" from whatever call was in flight — measured here as
+ * `window.wheat` becoming true a full 23 ms *before* this document's own
+ * `DOMContentLoaded`, and up to two seconds before the real one existed.
+ *
+ * Wheat's React root having mounted can only be true in the document Wheat
+ * actually renders into, so that is what this waits for. `waitForFunction`
+ * re-evaluates in the new context after a navigation, so a page that is replaced
+ * while this runs settles on the replacement rather than failing.
+ */
+async function waitForWheatWindow(page, { timeout = 20000 } = {}) {
+  await page.waitForFunction(
+    () => Boolean(window.wheat) && (document.getElementById("root")?.childElementCount ?? 0) > 0,
+    null,
+    { timeout },
+  );
+}
+
 async function connectPage(port) {
   const browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
   const context = browser.contexts()[0];
   const page = context.pages()[0] ?? await context.waitForEvent("page");
   await page.waitForLoadState("domcontentloaded");
-  await page.waitForFunction(() => Boolean(window.wheat), null, { timeout: 15000 });
+  await waitForWheatWindow(page);
   return { browser, page };
 }
 
@@ -129,4 +158,4 @@ function builtEdition() {
   }
 }
 
-module.exports = { root, builtEdition, freePort, waitForCdp, connectPage, runtimeTargetId, connectNewRuntime, launchWheat, stopWheat };
+module.exports = { root, builtEdition, freePort, waitForCdp, connectPage, runtimeTargetId, connectNewRuntime, launchWheat, stopWheat, waitForWheatWindow };

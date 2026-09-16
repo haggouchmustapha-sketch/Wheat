@@ -54,10 +54,11 @@ In order it:
 3. reads the release notes — an accountant reads these, so they are written, never generated from commits;
 4. runs `npm run lint` and `npm run test:updater`;
 5. runs `npm run dist:standard` **and** `npm run dist:lightweight` — one source revision, both editions, one version, built in sequence from this working tree so a release can never mix commits;
-6. writes and signs `latest.json`, including the per-edition installer map and its own signature;
-7. re-hashes both installers and **verifies both signatures against the public key compiled into this build** — signing with the wrong key would otherwise publish a release every client silently refuses;
-8. writes `release/<version>/wheat-website-release.json`, the one file the website needs to offer this release;
-9. writes `release/<version>/publish-plan.json` and prints exactly what would be uploaded.
+6. **verifies Windows Authenticode** on the installers, `Wheat.exe` and the elevation helper, by asking Windows rather than a signing tool — after the build, **before the first hash**, because a signature changes the bytes every later step describes. It writes `release/<version>/authenticode-report.json`, and throws if signing is configured and anything is unsigned, untimestamped or signed by a second publisher (`docs/wheat-code-signing.md`);
+7. writes and signs `latest.json`, including the per-edition installer map and its own signature;
+8. re-hashes both installers and **verifies both signatures against the public key compiled into this build** — signing with the wrong key would otherwise publish a release every client silently refuses;
+9. writes `release/<version>/wheat-website-release.json`, the one file the website needs to offer this release;
+10. writes `release/<version>/publish-plan.json` and prints exactly what would be uploaded.
 
 Useful flags: `--minimum-version <semver>`, `--skip-build` (reuse an installer),
 `--skip-tests` (recorded in the plan; **publish then refuses it**).
@@ -77,6 +78,7 @@ publish are separated by however long you spent reading the plan:
 - every asset still matches its prepared size and SHA-256;
 - the manifest names the installer it hashes, and its signature verifies against the key compiled into Wheat;
 - the manifest publishes **both** editions, its editions map is signed, and each edition's named installer is among the prepared assets with a matching digest — a release that named two editions and published one would leave half the installed base downloading a file that is not there;
+- Windows Authenticode, re-read from the files on disk. A release built with signing configured must verify; a release built without it is refused unless you pass `--allow-unsigned-windows`, so shipping an unsigned Wheat is a sentence somebody typed rather than something that happened quietly;
 - `gh` is authenticated;
 - the tag does not exist, and the version is newer than everything published.
 

@@ -230,6 +230,71 @@ test("GitHub's redirect to its own blob storage is followed, and nothing else is
   } finally { fs.rmSync(workspace, { recursive: true, force: true }); }
 });
 
+/* ------------------------------------------- Chromium's network stack --- */
+
+/**
+ * A stand-in for Electron's `net`, with the one behaviour that matters:
+ * `redirect: "manual"` means the request stops at the redirect and reports it.
+ */
+function fakeElectronNet(routes) {
+  const requested = [];
+  return {
+    requested,
+    request(options) {
+      requested.push(options.url);
+      const listeners = new Map();
+      const route = routes[options.url];
+      return {
+        setHeader() {},
+        abort() {},
+        on(event, listener) { listeners.set(event, listener); return this; },
+        end() {
+          setTimeout(() => {
+            if (!route) return listeners.get("response")?.({ statusCode: 404, headers: {} });
+            if (route.redirectTo) {
+              // What Electron really does: the hop is announced and *not* taken
+              // unless followRedirect() is called. It never is.
+              return listeners.get("redirect")?.(302, "GET", route.redirectTo, { "content-type": ["text/html"] });
+            }
+            const body = (async function* () { yield Buffer.from(route.body ?? ""); })();
+            Object.assign(body, { statusCode: 200 });
+            listeners.get("response")?.(Object.assign(body, { statusCode: 200, headers: { "content-type": ["application/json"] } }));
+          }, 0);
+        },
+      };
+    },
+  };
+}
+
+test("a redirect is reported rather than cancelled, so the update check works at all", async () => {
+  // Wheat 2.1.2609151 moved the updater onto Chromium's network stack so that a
+  // machine with an inspecting TLS gateway could still reach GitHub - and broke
+  // every update check doing it, because `net.fetch` rejects `redirect:
+  // "manual"` with "Redirect was cancelled" instead of handing back the 302.
+  // GitHub answers 302 twice before a release manifest, so no installed copy
+  // could find an update at all. Verified against the real repository.
+  const manifest = JSON.stringify(releaseObject());
+  const hop = "https://release-assets.githubusercontent.com/asset/1";
+  const net = fakeElectronNet({
+    [MANIFEST_URL]: { redirectTo: hop },
+    [hop]: { body: manifest },
+  });
+
+  const first = await updater.createElectronReleaseFetch(net)(MANIFEST_URL, { method: "GET", redirect: "manual" });
+  expect(first.status).toBe(302);
+  expect(first.headers.get("location")).toBe(hop);
+  // And the destination was not fetched: approving the hop is `requestRelease`'s
+  // job, and it has not been asked yet.
+  expect(net.requested).toEqual([MANIFEST_URL]);
+
+  // End to end through the real provider, the hop is then taken and the
+  // manifest arrives.
+  const provider = new updater.GitHubReleasesUpdateProvider(REPO, { fetchImpl: updater.createElectronReleaseFetch(net) });
+  const release = await provider.getLatestRelease();
+  expect(release.version).toBe("2.2.0");
+  expect(net.requested).toEqual([MANIFEST_URL, MANIFEST_URL, hop]);
+});
+
 test("an asset missing from the release fails loudly rather than retrying forever", async () => {
   const workspace = temporaryDirectory();
   try {

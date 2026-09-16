@@ -109,8 +109,8 @@ test("the application and the build scripts agree on every installer name", () =
 
 test("the Lightweight package excludes the local recognition runtime and nothing else", () => {
   const { version, build } = editions.readPackageBuildConfig(root);
-  const standard = editions.editionBuilderConfig(build, "standard", version);
-  const lightweight = editions.editionBuilderConfig(build, "lightweight", version);
+  const standard = editions.editionBuilderConfig(build, "standard", version, { root });
+  const lightweight = editions.editionBuilderConfig(build, "lightweight", version, { root });
 
   const names = (config) => config.extraResources.map((entry) => (typeof entry === "string" ? entry : entry.from));
   expect(names(standard)).toContain("resources/paddleocr");
@@ -124,14 +124,70 @@ test("the Lightweight package excludes the local recognition runtime and nothing
   expect(names(standard).length - names(lightweight).length).toBe(1);
   for (const config of [standard, lightweight]) {
     expect(names(config)).toContain("resources/tessdata");
-    expect(names(config)).toContain("prisma/dev.db");
+    expect(names(config)).toContain("build/wheat-seed.db");
+  }
+});
+
+test("packaging builds its seed database rather than resetting the developer's", () => {
+  const { version, build } = editions.readPackageBuildConfig(root);
+  const scripts = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")).scripts;
+
+  // The file an installer carries is built from the migrations and the seed
+  // script into disposable output. It used to be `prisma/dev.db`, which meant
+  // every `npm run pack` silently destroyed whatever the developer had in their
+  // working database — for a file packaging only ever reads — and shipped
+  // whatever that database happened to contain afterwards.
+  const seedEntry = build.extraResources.find((entry) => entry.to === "seed/wheat-seed.db");
+  expect(seedEntry.from).toBe("build/wheat-seed.db");
+  expect(seedEntry.from).not.toContain("dev.db");
+
+  for (const script of ["installer", "dist:edition", "portable", "pack"]) {
+    expect(scripts[script], script).toContain("npm run seed:build");
+    expect(scripts[script], script).not.toContain("db:reset");
+  }
+  // `db:reset` stays available; it is simply a developer's deliberate choice now.
+  expect(scripts["db:reset"]).toContain("prisma migrate reset");
+
+  // Both editions package the same seed, because both inherit extraResources.
+  for (const edition of editions.WHEAT_EDITIONS) {
+    const config = editions.editionBuilderConfig(build, edition, version, { root });
+    expect(config.extraResources.some((entry) => entry.to === "seed/wheat-seed.db")).toBe(true);
+  }
+});
+
+test("neither installer carries an interrupted `prisma generate`", () => {
+  const { version, build } = editions.readPackageBuildConfig(root);
+  const prismaEntry = build.files.find((entry) => typeof entry === "object" && entry.from === "node_modules/.prisma");
+  expect(prismaEntry, "the generated Prisma client must be packaged explicitly").toBeTruthy();
+
+  // `prisma generate` writes the query engine to `query_engine-windows.dll.node.tmp<pid>`
+  // and renames it. A run that is interrupted leaves the temporary copy behind,
+  // and each one is 20 MB. Twelve of them were found inside the released
+  // 2.1.2609151 installers - 242 MB of dead weight in *both* editions, including
+  // the one whose entire purpose is being small, and a different number on every
+  // machine, so the installer size and its SHA-256 were not reproducible either.
+  expect(prismaEntry.filter).toContain("!**/*.node.tmp*");
+
+  const engineRoot = path.join(root, "node_modules", ".prisma", "client");
+  if (fs.existsSync(engineRoot)) {
+    const excluded = (name) => /\.node\.tmp\d*$/.test(name);
+    const names = fs.readdirSync(engineRoot);
+    // The real engine is not caught by the exclusion; a leftover copy is.
+    expect(names.filter((name) => /^query_engine-.*\.node$/.test(name)).every((name) => !excluded(name))).toBe(true);
+    for (const name of names.filter((name) => /\.node\.tmp/.test(name))) expect(excluded(name)).toBe(true);
+  }
+
+  // Both editions inherit it, because both inherit `files` unchanged.
+  for (const edition of editions.WHEAT_EDITIONS) {
+    const config = editions.editionBuilderConfig(build, edition, version, { root });
+    expect(config.files).toEqual(build.files);
   }
 });
 
 test("both editions keep one Windows identity, one install directory and one profile", () => {
   const { version, build } = editions.readPackageBuildConfig(root);
-  const standard = editions.editionBuilderConfig(build, "standard", version);
-  const lightweight = editions.editionBuilderConfig(build, "lightweight", version);
+  const standard = editions.editionBuilderConfig(build, "standard", version, { root });
+  const lightweight = editions.editionBuilderConfig(build, "lightweight", version, { root });
 
   // This is what makes switching edition an ordinary in-place install that
   // keeps the dossier, the documents, the backups and the settings. A second
@@ -151,7 +207,7 @@ test("both editions keep one Windows identity, one install directory and one pro
 
 test("an unknown edition cannot produce a package configuration", () => {
   const { version, build } = editions.readPackageBuildConfig(root);
-  expect(() => editions.editionBuilderConfig(build, "lite", version)).toThrow(/Unknown Wheat edition/);
+  expect(() => editions.editionBuilderConfig(build, "lite", version, { root })).toThrow(/Unknown Wheat edition/);
 });
 
 /* --------------------------------------------------- the parity guarantee */

@@ -406,7 +406,9 @@ still read.
 None of the following can be established from this repository. They are the
 list to work through on hardware before calling a two-edition release done.
 
-**Lightweight, on the machines it exists for**
+**Lightweight, on the machines it exists for** — the procedure is
+`docs/wheat-low-end-acceptance.md`, and `scripts/wheat-field-report.ps1` collects
+the measurable half on the tester's own machine.
 
 - Windows 10, old Intel integrated graphics (HD 4000-era): startup, window
   resize, dialogs, the documents screen, a 30-document import.
@@ -419,7 +421,7 @@ list to work through on hardware before calling a two-edition release done.
 
 **Cloud reading**
 
-- The PKCE callback under **NSIS install conditions**. The flow itself is proven from a packaged build (loopback server, system browser, exchange, vault, automatic resume); it was driven from the packaged directory rather than an NSIS-installed copy, so Windows Firewall prompting on first listen is still untried.
+- Completing a PKCE sign-in from an **NSIS-installed** copy. The flow is proven from a packaged build (loopback server, system browser, exchange, vault, automatic resume), and the installed build has now been observed opening the callback server on `127.0.0.1` with no Windows Firewall prompt and no rule created; what remains is a real sign-in completed from the installed copy.
 - A poor connection: slow upload of a page image, and a timeout mid-import.
 - Disconnecting the network **during** an import, and confirming the Tesseract
   fallback takes over rather than the import failing.
@@ -429,9 +431,28 @@ list to work through on hardware before calling a two-edition release done.
 
 **Both editions**
 
-- Windows Defender and SmartScreen on both installers (neither is
-  code-signed; the Lightweight one is new and has no reputation at all).
-- Update Standard to Standard and Lightweight to Lightweight on a real machine. Artifact selection, the editions signature and the refusal to cross editions are verified against 2.1.2609151's actual signed manifest; what is untried is a machine downloading and installing it.
-- Manual switch Standard to Lightweight and back **through the installers**. Both packaged editions have been run against the same `%APPDATA%\Wheat\` in turn, each reading the other's dossier and documents unchanged, so the data claim holds; the uninstall/install mechanics are what remain.
+- Windows Defender and SmartScreen on both installers. Neither is code-signed
+  yet; the signing pipeline is implemented and waiting on a certificate — see
+  `docs/wheat-code-signing.md`.
+- Update Standard to Standard and Lightweight to Lightweight on a real machine. Artifact selection, the editions signature and the refusal to cross editions are verified against 2.1.2609151's actual signed manifest, and the installer mechanics an update depends on are now proven (see below); what is untried is a machine finding and downloading a genuinely newer published release.
 - An existing 2.1.x installation updated to the first two-edition release,
   confirming it lands on Standard.
+
+### Done since: the installers themselves
+
+Both real installers have now been run on Windows 11, silently, against a
+profile holding a dossier, 585 documents and 16 backups. Clean install of each
+edition, Lightweight → Standard, Standard → Lightweight, uninstall, and a clean
+Standard install afterwards — five installs, four edition transitions.
+
+The database was byte-identical at every checkpoint. Switching to Lightweight
+leaves **no** orphaned recognition runtime: the install directory drops from
+27 455 files / 3 150 MB to 404 files / 1 074 MB, exactly a clean Lightweight
+install, because the incoming installer runs the previous uninstaller first.
+Uninstalling removes the program and keeps every byte of user data.
+
+The cloud callback server was also watched from the installed build: it binds
+`127.0.0.1` on an ephemeral port, and Windows Firewall neither prompted nor
+created a rule.
+
+Full results, with the commands to reproduce them: `docs/wheat-installer-testing.md`.

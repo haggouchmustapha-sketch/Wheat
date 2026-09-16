@@ -17,7 +17,7 @@ npm run db:reset            # recreate local database and load seed data
 npx playwright test tests/wheat-reconciliation-unit.spec.cjs --reporter=line
 ```
 
-Use `npm run test:desktop`, `npm run test:ocr`, or `npm run test:updater` for their focused suites. Packaging commands (`installer`, `portable`, `pack`, `dist:standard`, `dist:lightweight`) reset the database and build; do not use them for routine checks.
+Use `npm run test:desktop`, `npm run test:ocr`, or `npm run test:updater` for their focused suites. Packaging commands (`installer`, `portable`, `pack`, `dist:standard`, `dist:lightweight`) build a disposable seed database into `build/` and leave `prisma/dev.db` alone; do not use them for routine checks. `npm run sign:verify` reports the real Authenticode state of a built release; development builds are unsigned by design (`docs/wheat-code-signing.md`).
 
 ## Editions
 

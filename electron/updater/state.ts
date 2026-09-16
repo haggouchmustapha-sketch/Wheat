@@ -45,6 +45,7 @@ export class UpdateStateStore {
       // has been replaced by a newer version.
       if (parsed.offered?.postponed) parsed.status.postponed = true;
       else delete parsed.status.postponed;
+      this.discardOvertakenOffer(parsed);
       return parsed;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return this.defaultState();
@@ -61,6 +62,42 @@ export class UpdateStateStore {
         },
       };
     }
+  }
+
+  /**
+   * Drops an offer the running Wheat has already overtaken.
+   *
+   * Wheat can reach a new version by means other than its own updater: a
+   * reinstall over the top, and above all an **edition switch**, which is
+   * documented as an ordinary in-place install of the other edition. The state
+   * file then still said "Update 2.1.2609151 available" to somebody who had
+   * just finished installing 2.1.2609151 — and accepting it led to a refusal,
+   * because `assertUpdateCompatibility` will not install a version that is not
+   * newer. Observed on a real edition switch during release hardening.
+   *
+   * `installing`, `awaiting-confirmation` and `updated` legitimately name the
+   * version now running — that is exactly how `confirmSuccessfulStartup`
+   * recognises a successful handoff — and `error` is a diagnosis somebody still
+   * needs to see, including the pending record `hasUnresolvedInstallationFailure`
+   * reads. Every other phase is cleared, not just the two offer phases: a failed
+   * check leaves the offer in place and the phase at `idle`, which is how the
+   * stale "2.1.2609151 available" survived into an installed 2.1.2609151.
+   */
+  private discardOvertakenOffer(state: PersistedUpdateState) {
+    const offered = state.status.availableVersion;
+    const keeps = ["installing", "awaiting-confirmation", "updated", "error"];
+    if (!offered || keeps.includes(state.status.phase)) return;
+    if (!semver.valid(offered) || semver.gt(offered, this.currentVersion)) return;
+    state.status.phase = "up-to-date";
+    state.status.message = `Wheat ${this.currentVersion} is up to date`;
+    delete state.status.availableVersion;
+    delete state.status.availableRelease;
+    delete state.status.postponed;
+    delete state.status.download;
+    delete state.offered;
+    // The staged installer, if any, is for a version this build already is.
+    // Dropping it here is also what lets the service delete those bytes.
+    delete state.pending;
   }
 
   async write(state: PersistedUpdateState) {

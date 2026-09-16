@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { signingBuilderOptions } from "./wheatSigning.mjs";
 
 /**
  * The edition system, from the build side.
@@ -61,16 +62,25 @@ function normalizeResourcePath(value) {
  * would slowly stop matching. Both editions therefore inherit every future
  * change to files, asarUnpack, NSIS behaviour and signing automatically.
  */
-export function editionBuilderConfig(baseBuildConfig, edition, version) {
+export function editionBuilderConfig(baseBuildConfig, edition, version, { root, env = process.env }) {
   const id = assertEdition(edition);
+  if (!root) throw new Error("editionBuilderConfig needs the repository root: the signing configuration is read from the tree.");
   const excluded = new Set(EXCLUDED_EXTRA_RESOURCES[id].map(normalizeResourcePath));
   const extraResources = (baseBuildConfig.extraResources ?? []).filter((entry) => {
     const from = normalizeResourcePath(typeof entry === "string" ? entry : entry.from);
     return !excluded.has(from);
   });
 
+  // Windows code signing is composed once and merged into both editions, so the
+  // two installers can only ever carry the same publisher identity. Standard and
+  // Lightweight are one product; a user who switches edition must not be told
+  // they are installing software from somebody else, and SmartScreen publisher
+  // reputation must accumulate across both rather than be split in half.
+  const signing = signingBuilderOptions(root, env);
+
   return {
     ...baseBuildConfig,
+    win: { ...baseBuildConfig.win, ...signing },
     // One identity, one install directory, one uninstall entry and one
     // %APPDATA%\Wheat for both editions. Switching edition is therefore an
     // ordinary in-place install that keeps the dossier, the documents, the

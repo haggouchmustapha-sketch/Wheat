@@ -89,8 +89,47 @@ export class UpdateService {
     if (this.installPromise) return this.getStatus();
     const state = await this.store.confirmSuccessfulStartup();
     if (state.status.phase === "updated") await this.logger.log("update-success", { version: this.options.currentVersion });
+    await this.pruneStagedInstallers(state);
     this.emit(state.status);
     return state.status;
+  }
+
+  /**
+   * Deletes staged installers that no longer belong to a pending update.
+   *
+   * A Wheat installer is between 300 MB and 1.4 GB. `stageUpdate` cleared only
+   * the directory of the version it was about to download, so every update that
+   * actually installed left its own installer in `%APPDATA%\Wheat\updater\staging`
+   * permanently — found during release hardening as 1.39 GB of a superseded
+   * version sitting in a profile. Nothing reads it again: the install either
+   * succeeded, in which case the bytes are now the running program, or failed,
+   * in which case the offer is re-downloaded and re-verified from scratch.
+   *
+   * It runs on the confirmation that follows every launch, so an installation
+   * that has been carrying old installers for several versions cleans itself up
+   * without the user doing anything.
+   *
+   * Housekeeping never fails an update: a file held open by a virus scanner is
+   * skipped and retried at the next launch.
+   */
+  private async pruneStagedInstallers(state: PersistedUpdateState) {
+    const stagingRoot = path.join(this.options.stateDirectory, "staging");
+    const keep = state.pending?.release.version ?? null;
+    let entries: fs.Dirent[];
+    try {
+      entries = await fs.promises.readdir(stagingRoot, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.name === keep) continue;
+      try {
+        await fs.promises.rm(path.join(stagingRoot, entry.name), { recursive: true, force: true });
+        await this.logger.log("staging-pruned", { version: entry.name });
+      } catch {
+        // Retried at the next launch.
+      }
+    }
   }
 
   async acknowledgeInstalledUpdate() {

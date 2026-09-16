@@ -53,7 +53,7 @@ function fixtureRepository(version = "9.9.9") {
   for (const file of ["release-publish.mjs", "release-prepare.mjs"]) {
     fs.copyFileSync(path.join(root, "scripts", file), path.join(directory, "scripts", file));
   }
-  for (const file of ["releaseManifest.mjs", "releaseRepository.mjs", "wheatEditions.mjs"]) {
+  for (const file of ["releaseManifest.mjs", "releaseRepository.mjs", "wheatEditions.mjs", "wheatSigning.mjs"]) {
     fs.copyFileSync(path.join(root, "scripts", "lib", file), path.join(directory, "scripts", "lib", file));
   }
   fs.mkdirSync(path.join(directory, "electron", "updater"), { recursive: true });
@@ -489,6 +489,27 @@ test("publishing refuses a release whose editions map is unsigned", async () => 
   } finally { fs.rmSync(fixture.directory, { recursive: true, force: true }); }
 });
 
+test("publishing refuses installers Windows would call an unknown publisher", async () => {
+  const fixture = fixtureRepository();
+  try {
+    const key = keyPair();
+    compileKeyInto(fixture, key.publicPem);
+    await preparePlan(fixture, { key });
+
+    // Every Ed25519 check passes; the installers still carry no Authenticode
+    // signature, so Windows would present Wheat as coming from an unknown
+    // publisher and Smart App Control might refuse to run it. That is a
+    // deliberate decision, not a default.
+    const result = runPublish(fixture);
+    expect(result.ok).toBe(false);
+    expect(result.output).toMatch(/sha256 ok/);
+    expect(result.output).toMatch(/Signature verifies against the key compiled into Wheat/);
+    expect(result.output).toMatch(/no Windows Authenticode signature/i);
+    expect(result.output).toMatch(/--allow-unsigned-windows/);
+    expect(result.output).not.toMatch(/^Published Wheat/m);
+  } finally { fs.rmSync(fixture.directory, { recursive: true, force: true }); }
+});
+
 test("a well-formed plan passes every local gate and still publishes nothing", async () => {
   const fixture = fixtureRepository();
   try {
@@ -500,7 +521,7 @@ test("a well-formed plan passes every local gate and still publishes nothing", a
     // still ends without a release, because the remote it targets does not
     // exist. That ordering is the point: nothing is uploaded until after every
     // integrity check has already passed.
-    const result = runPublish(fixture);
+    const result = runPublish(fixture, ["--allow-unsigned-windows"]);
     expect(result.output).toMatch(/sha256 ok/);
     expect(result.output).toMatch(/Signature verifies against the key compiled into Wheat/);
     // Both editions signed and matched to their own prepared installer.

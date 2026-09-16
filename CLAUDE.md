@@ -70,6 +70,12 @@ For updater/release work, read `docs/wheat-release-process.md` and the existing 
 
 A release publishes **both** editions from one commit, with one version. The updater must never cross editions; `electron/updater/edition.ts` decides which artifact this build installs.
 
+Windows releases are Authenticode signed through `scripts/lib/wheatSigning.mjs`;
+read `docs/wheat-code-signing.md` before touching signing, packaging order or the
+release scripts. Both editions sign as one publisher, third-party binaries keep
+their own vendors' signatures, and Authenticode never replaces the Ed25519
+manifest signature — they answer different questions and a release needs both.
+
 Non-negotiable updater rules:
 - User data in `%APPDATA%\Wheat\` must never be replaced or reset by an update.
 - Never add `prisma migrate reset` or database recreation to update paths.
@@ -92,6 +98,7 @@ npm run build
 npm run lint
 npm run db:push
 npm run db:seed
+npm run seed:build
 
 npm run test:desktop
 npm run test:ocr
@@ -105,6 +112,8 @@ npm run dist:lightweight
 npm run installer
 npm run portable
 npm run pack
+
+npm run sign:verify
 ```
 
 Run the relevant tests after changes. Do not publish a release as part of ordinary development work.

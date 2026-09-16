@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { assertEdition, editionBuilderConfig, readPackageBuildConfig, wheatInstallerFileName } from "./lib/wheatEditions.mjs";
+import { buildSigningReport, resolveSigningMode, signingChildEnvironment } from "./lib/wheatSigning.mjs";
 
 /**
  * Packages one edition of the Wheat that is already built in `dist/` and
@@ -30,7 +31,8 @@ const flagIndex = args.indexOf("--edition");
 const edition = assertEdition(flagIndex >= 0 ? args[flagIndex + 1] : process.env.WHEAT_EDITION ?? "standard");
 
 const { version, build } = readPackageBuildConfig(root);
-const config = editionBuilderConfig(build, edition, version);
+const signing = resolveSigningMode();
+const config = editionBuilderConfig(build, edition, version, { root });
 
 // ---------------------------------------------------------------- build check
 if (!fs.existsSync(path.join(root, "dist-electron", "main.js"))) {
@@ -55,6 +57,7 @@ console.log(`Packaging Wheat ${version} — ${edition}`);
 console.log(`  config   ${path.relative(root, configPath)}`);
 console.log(`  artifact ${path.relative(root, artifact)}`);
 console.log(`  resources ${config.extraResources.length} entr${config.extraResources.length === 1 ? "y" : "ies"}`);
+console.log(`  signing  ${signing.mode} — ${signing.detail}`);
 
 /**
  * electron-builder's own entry point, run by this Node.
@@ -72,11 +75,39 @@ const builderCli = path.join(root, "node_modules", "electron-builder", "cli.js")
 execFileSync(
   process.execPath,
   [builderCli, "--win", "nsis", "--x64", "--config", path.relative(root, configPath).replaceAll("\\", "/")],
-  { cwd: root, stdio: "inherit", windowsHide: true },
+  {
+    cwd: root,
+    stdio: "inherit",
+    windowsHide: true,
+    // The PFX password, when there is one, reaches electron-builder only as an
+    // environment variable of this child process. It is never written into the
+    // generated config, never logged, and never leaves this process tree.
+    env: { ...process.env, ...signingChildEnvironment() },
+  },
 );
 
 if (!fs.existsSync(artifact)) throw new Error(`electron-builder did not produce ${artifact}.`);
 console.log(`\n${path.relative(root, artifact)}  ${(fs.statSync(artifact).size / (1024 * 1024)).toFixed(1)} MB`);
+
+/*
+ * Authenticode, checked here rather than only at release time.
+ *
+ * Both editions build into the same `release/<version>/win-unpacked`, so the
+ * second one overwrites the first: by the time `release-prepare.mjs` looks,
+ * `Wheat.exe` belongs to whichever edition was packaged last. The only moment
+ * this edition's own application binary and uninstaller exist on disk is right
+ * now, so this is where they are verified.
+ *
+ * Silent when signing is off, which is every ordinary development build.
+ */
+if (signing.mode !== "off") {
+  const report = buildSigningReport(root, version, { fileNames: [path.basename(artifact)] });
+  for (const entry of report.artifacts) console.log(`  ${entry.role.padEnd(18)} ${entry.summary}`);
+  if (report.verdict !== "PASS") {
+    throw new Error(`The ${edition} package is configured to be signed but does not verify: ${report.failure}`);
+  }
+  console.log(`  AUTHENTICODE PASS — ${report.publishers.join(", ")}`);
+}
 
 /**
  * Reads the edition the build actually declared.

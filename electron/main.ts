@@ -92,6 +92,7 @@ import {
 } from "./accounting";
 import {
   UpdateService,
+  createElectronReleaseFetch,
   launchWindowsUpdateHelper,
   resolveAutomaticInstallationEnabled,
   resolveLocalUpdateDirectory,
@@ -824,7 +825,11 @@ if (hasSingleInstanceLock) app.whenReady().then(() => {
     // Chromium's stack, for the same reason the provider service uses it: a
     // machine whose TLS is inspected must still be able to find and download
     // its updates. Verification of what arrives is unchanged.
-    fetchImpl: (url, init) => net.fetch(url, init),
+    //
+    // Built on `net.request` rather than `net.fetch`, because `net.fetch`
+    // rejects `redirect: "manual"` outright and the updater vets every redirect
+    // by hand. See `createElectronReleaseFetch`.
+    fetchImpl: createElectronReleaseFetch(net),
   });
   updateService = new UpdateService({
     currentVersion: WHEAT_APP_VERSION,

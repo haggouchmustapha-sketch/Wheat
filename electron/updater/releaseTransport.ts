@@ -41,6 +41,104 @@ export type ReleaseRequestOptions = {
 };
 
 /**
+ * A fetch over Chromium's network stack that actually supports
+ * `redirect: "manual"`.
+ *
+ * Wheat moved the updater onto `net.fetch` so that finding and downloading an
+ * update uses this computer's certificate store and proxy — an office gateway
+ * or antivirus that inspects TLS otherwise makes every update attempt fail on a
+ * certificate only Windows trusts.
+ *
+ * But `net.fetch` **does not implement `redirect: "manual"`**. It rejects with
+ * "Redirect was cancelled" instead of handing back the 3xx, and `requestRelease`
+ * below asks for exactly that on every request — so every update check against
+ * GitHub Releases, which answers 302 twice before the manifest, failed with
+ * "Update server unreachable". Measured against Electron 42 and the real
+ * repository during release hardening, on an installed build.
+ *
+ * Following redirects automatically is not the fix. The point of doing them by
+ * hand is that each hop is vetted *before* Wheat goes there; `redirect:
+ * "follow"` would already have fetched from wherever it was sent.
+ *
+ * `net.request` does support it: with `redirect: "manual"` it emits a `redirect`
+ * event carrying the status, the destination and the headers, and goes nowhere
+ * unless `followRedirect()` is called — which this never calls. It is adapted
+ * here into the small part of the `Response` shape this module uses: a status,
+ * one header lookup, and a body that streams.
+ */
+export function createElectronReleaseFetch(net: { request: (options: any) => any }): FetchLike {
+  return (url, init = {}) => new Promise((resolve, reject) => {
+    let settled = false;
+    const settle = (finish: (value: any) => void, value: any) => {
+      if (settled) return;
+      settled = true;
+      finish(value);
+    };
+
+    const request = net.request({
+      method: init.method ?? "GET",
+      url: String(url),
+      redirect: "manual",
+      // A release manifest is public and is trusted only because of its
+      // signature. It has no use for the browsing session's cookies.
+      useSessionCookies: false,
+    });
+
+    for (const [name, value] of Object.entries(init.headers ?? {})) request.setHeader(name, String(value));
+
+    const abort = () => {
+      try { request.abort(); } catch { /* already finished */ }
+      settle(reject, Object.assign(new Error("The operation was aborted."), { name: "AbortError" }));
+    };
+    const signal = init.signal as AbortSignal | undefined;
+    if (signal?.aborted) {
+      abort();
+      return;
+    }
+    signal?.addEventListener("abort", abort, { once: true });
+
+    // A redirect Wheat has not approved. Reported as the response it is, and the
+    // request stops here: `followRedirect()` is never called, so nothing is
+    // fetched from the destination until `requestRelease` has allowed it.
+    request.on("redirect", (status: number, _method: string, redirectUrl: string, headers: Record<string, string[]>) => {
+      try { request.abort(); } catch { /* the redirect already ended it */ }
+      settle(resolve, releaseResponse(status, { ...headers, location: [redirectUrl] }, null));
+    });
+
+    request.on("response", (response: any) => {
+      settle(resolve, releaseResponse(response.statusCode, response.headers ?? {}, response));
+    });
+    request.on("error", (error: Error) => settle(reject, error));
+    request.end();
+  });
+}
+
+/** The part of `Response` that `requestRelease` and `downloadArtifact` use. */
+function releaseResponse(status: number, headers: Record<string, string | string[]>, body: any) {
+  const lookup = new Map<string, string>();
+  for (const [name, value] of Object.entries(headers)) {
+    lookup.set(name.toLowerCase(), Array.isArray(value) ? String(value[0]) : String(value));
+  }
+  const collect = async () => {
+    const chunks: Buffer[] = [];
+    if (body) for await (const chunk of body) chunks.push(Buffer.from(chunk));
+    return Buffer.concat(chunks);
+  };
+  return {
+    status,
+    ok: status >= 200 && status < 300,
+    headers: { get: (name: string) => lookup.get(String(name).toLowerCase()) ?? null },
+    body,
+    arrayBuffer: async () => {
+      const buffer = await collect();
+      return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+    },
+    text: async () => (await collect()).toString("utf8"),
+    json: async () => JSON.parse((await collect()).toString("utf8")),
+  };
+}
+
+/**
  * One GET, with redirects followed by hand.
  *
  * `redirect: "manual"` rather than the default, because the default would let a

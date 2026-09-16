@@ -14,6 +14,7 @@ import {
   signRelease,
 } from "./lib/releaseManifest.mjs";
 import { WHEAT_EDITIONS, editionArtifactPaths } from "./lib/wheatEditions.mjs";
+import { buildSigningReport } from "./lib/wheatSigning.mjs";
 import { RELEASE_BRANCH, ghIsAuthenticated, ghJson, readPackageMetadata, readSourceProvenance, remoteBranchHead, repositoryRoot, resolveReleaseRepository } from "./lib/releaseRepository.mjs";
 import { createPublicKey, verify } from "node:crypto";
 
@@ -224,6 +225,49 @@ for (const entry of editionArtifacts) {
 // Wheat released before editions existed will read and install.
 const artifactPath = editionArtifacts.find((entry) => entry.edition === "standard").path;
 
+// ------------------------------------------------------- 6b. Authenticode
+//
+// **Order matters, and this is where it is enforced.**
+//
+// An Authenticode signature is written *into* the executable, so it changes the
+// bytes. electron-builder signs during packaging, which means the installers on
+// disk right now are already final — but nothing after this point may touch
+// them, because every SHA-256 below, the manifest, the Ed25519 signature, the
+// website metadata and the publish plan all describe these exact bytes.
+//
+// So the signature is verified here: after the build, before the first hash.
+// Reading it from Windows rather than from a signing tool's exit code, because
+// what matters is what a user's machine will conclude, not what the signer
+// believed it did.
+//
+// This is a *different* signature from the Ed25519 one below. Authenticode
+// proves to Windows who published the installer; the Ed25519 manifest signature
+// proves to Wheat that a release came from Wheat. Neither replaces the other and
+// both must pass.
+step("Windows Authenticode");
+const signingReport = buildSigningReport(root, version, { fileNames: editionArtifacts.map((entry) => entry.fileName) });
+console.log(`  mode ${signingReport.mode} — ${signingReport.modeDetail}`);
+for (const artifact of signingReport.artifacts) {
+  console.log(`  ${artifact.role.padEnd(18)} ${path.basename(artifact.name)}`);
+  console.log(`  ${"".padEnd(18)} ${artifact.summary}`);
+}
+console.log(`  AUTHENTICODE: ${signingReport.verdict}`);
+if (signingReport.publishers.length) console.log(`  PUBLISHER DISPLAY: ${signingReport.publishers.join(", ")}`);
+if (signingReport.mode !== "off" && signingReport.verdict !== "PASS") {
+  // Loud, and fatal. The failure this guard exists for is the quiet one: signing
+  // breaks, the build carries on, and an unsigned installer is published as an
+  // official signed release.
+  throw new Error(
+    `Windows code signing is configured (mode "${signingReport.mode}") but the built artifacts do not verify: ${signingReport.failure}`,
+  );
+}
+if (signingReport.mode === "off") {
+  console.log("  WARNING: these installers are NOT Authenticode signed. Windows will show \"Unknown publisher\",");
+  console.log("           and release:publish will refuse them unless you pass --allow-unsigned-windows.");
+}
+const signingReportPath = path.join(releaseDirectory, "authenticode-report.json");
+fs.writeFileSync(signingReportPath, `${JSON.stringify(signingReport, null, 2)}\n`, "utf8");
+
 // --------------------------------------------------------------- 7. manifest
 step("Update metadata");
 const manifest = await buildReleaseManifest({
@@ -355,6 +399,24 @@ const plan = {
   notesFile: path.relative(root, resolvedNotes),
   notes,
   signed: Boolean(manifest.signature),
+  // The Windows Authenticode state of the artifacts this plan would upload, as
+  // it was at prepare time. `release-publish.mjs` re-reads the real files and
+  // refuses to publish an unsigned release that is not explicitly acknowledged.
+  windowsSigning: {
+    mode: signingReport.mode,
+    verdict: signingReport.verdict,
+    publishers: signingReport.publishers,
+    artifacts: signingReport.artifacts.map((artifact) => ({
+      role: artifact.role,
+      name: artifact.name,
+      status: artifact.status,
+      signed: artifact.signed,
+      timestamped: artifact.timestamped,
+      publisher: artifact.publisher,
+      thumbprint: artifact.thumbprint,
+      notAfter: artifact.notAfter,
+    })),
+  },
   editions: Object.fromEntries(editionArtifacts.map((entry) => [entry.edition, {
     artifact: path.basename(entry.path),
     sha256: manifest.editions[entry.edition].sha256,

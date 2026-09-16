@@ -1,5 +1,6 @@
 const { test, expect, _electron: electron } = require("@playwright/test");
 const { chooseOption, openDossierForWork } = require("./wheat-ui-helpers.cjs");
+const { waitForWheatWindow } = require("./wheat-electron-harness.cjs");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -74,14 +75,47 @@ async function launchApp(userDataDir, runtimeErrors) {
     if (message.type() === "error") runtimeErrors.push(`RENDERER_CONSOLE_ERROR: ${message.text()}`);
   });
   await page.waitForLoadState("domcontentloaded");
-  await page.waitForFunction(() => Boolean(window.wheat), null, { timeout: 15000 });
+  // Not `window.wheat`: the preload puts that on the window's initial empty
+  // document too, so waiting on it hands back a page Wheat is about to replace —
+  // and this suite then loses the race under load. See `waitForWheatWindow`.
+  await waitForWheatWindow(page);
   return { app, page };
 }
 
-async function selectNativeFile(app, filePath) {
-  await app.evaluate(({ dialog }, selectedPath) => {
-    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedPath] });
-  }, filePath);
+/**
+ * Makes Wheat's native file chooser return whatever `chooseNativeFile` last
+ * wrote, without another call into the main process.
+ *
+ * The stub used to be re-installed with `electronApplication.evaluate` before
+ * every one of the twelve imports below, and that is where this suite failed
+ * intermittently: a CDP evaluation issued in the middle of a run is raced
+ * against the renderer's execution-context churn, and when it loses Playwright
+ * reports "Execution context was destroyed, most likely because of a
+ * navigation" from whichever import happened to be in flight. Reproduced in
+ * three separate runs, at three different imports, which is what ruled out any
+ * one format being at fault.
+ *
+ * So the main process is now addressed exactly once, at launch, while nothing
+ * else is happening, and each subsequent selection is an ordinary file write
+ * this process makes and the stub reads. Twelve CDP round-trips become zero,
+ * and there is nothing left to race.
+ */
+async function installFileChooser(app, controlFile) {
+  fs.writeFileSync(controlFile, "", "utf8");
+  await app.evaluate(({ dialog }, control) => {
+    // Playwright evaluates this inside the main process but outside any module
+    // scope, so there is no bare `require`; the entry module's own is reachable.
+    const nodeFs = process.mainModule.require("node:fs");
+    dialog.showOpenDialog = async () => {
+      const selected = nodeFs.readFileSync(control, "utf8").trim();
+      if (!selected) return { canceled: true, filePaths: [] };
+      return { canceled: false, filePaths: [selected] };
+    };
+  }, controlFile);
+}
+
+function chooseNativeFile(controlFile, filePath) {
+  fs.writeFileSync(controlFile, filePath, "utf8");
 }
 
 test("Wheat 2.0 reviews, imports, deduplicates and persists every implemented bank format", async () => {
@@ -89,6 +123,8 @@ test("Wheat 2.0 reviews, imports, deduplicates and persists every implemented ba
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "atlas-bank-2-"));
   const userDataDir = path.join(tempRoot, "userData");
   const fixtures = await makeFixtures(tempRoot);
+  // What the stubbed native file chooser will return next.
+  const fileChooser = path.join(tempRoot, "native-file-choice.txt");
   const runtimeErrors = [];
   let app;
 
@@ -96,6 +132,7 @@ test("Wheat 2.0 reviews, imports, deduplicates and persists every implemented ba
     let launched = await launchApp(userDataDir, runtimeErrors);
     app = launched.app;
     let page = launched.page;
+    await installFileChooser(app, fileChooser);
     await expect(page.locator(".onboarding-shell")).toBeVisible({ timeout: 15000 });
     await page.getByLabel("Nom de la société").fill("Atlas Test SARL");
     await page.getByLabel("Ville").fill("Casablanca");
@@ -143,7 +180,7 @@ test("Wheat 2.0 reviews, imports, deduplicates and persists every implemented ba
     await expect(page.getByRole("button", { name: "Importer un relevé" })).toBeEnabled({ timeout: 15000 });
 
     const importReviewed = async (filePath, formatPattern, reference) => {
-      await selectNativeFile(app, filePath);
+      chooseNativeFile(fileChooser, filePath);
       await page.getByRole("button", { name: "Importer un relevé" }).click();
       const modal = page.getByRole("dialog", { name: "Contrôler le relevé bancaire" });
       await expect(modal).toBeVisible({ timeout: 15000 });
@@ -169,7 +206,7 @@ test("Wheat 2.0 reviews, imports, deduplicates and persists every implemented ba
      * held in component state, so coming back re-proposed the suggestion they
      * had just corrected. It is now held against this file in this account.
      */
-    await selectNativeFile(app, fixtures.csv);
+    chooseNativeFile(fileChooser, fixtures.csv);
     await page.getByRole("button", { name: "Importer un relevé" }).click();
     const mappingModal = page.getByRole("dialog", { name: "Contrôler le relevé bancaire" });
     await expect(mappingModal).toBeVisible({ timeout: 15000 });
@@ -180,7 +217,7 @@ test("Wheat 2.0 reviews, imports, deduplicates and persists every implemented ba
     await mappingModal.getByRole("button", { name: "Annuler" }).click();
     await expect(mappingModal).toHaveCount(0);
 
-    await selectNativeFile(app, fixtures.csv);
+    chooseNativeFile(fileChooser, fixtures.csv);
     await page.getByRole("button", { name: "Importer un relevé" }).click();
     await expect(mappingModal).toBeVisible({ timeout: 15000 });
     await expect(mappingModal).toContainText("Correspondance retrouvée", { timeout: 15000 });
@@ -203,7 +240,7 @@ test("Wheat 2.0 reviews, imports, deduplicates and persists every implemented ba
 
     // Exact bytes remain blocked after a rename; the file chooser never writes
     // a second movement before this review finishes.
-    await selectNativeFile(app, fixtures.renamedCsv);
+    chooseNativeFile(fileChooser, fixtures.renamedCsv);
     await page.getByRole("button", { name: "Importer un relevé" }).click();
     let modal = page.getByRole("dialog", { name: "Contrôler le relevé bancaire" });
     await modal.getByTestId("bank-import-review").click();
@@ -229,7 +266,7 @@ test("Wheat 2.0 reviews, imports, deduplicates and persists every implemented ba
      * movements among every movement the account had ever held. "Rapprocher
      * maintenant" opens the desk on that file, and says which file it shows.
      */
-    await selectNativeFile(app, fixtures.batch);
+    chooseNativeFile(fileChooser, fixtures.batch);
     await page.getByRole("button", { name: "Importer un relevé" }).click();
     const batchModal = page.getByRole("dialog", { name: "Contrôler le relevé bancaire" });
     await expect(batchModal).toBeVisible({ timeout: 15000 });
@@ -255,7 +292,7 @@ test("Wheat 2.0 reviews, imports, deduplicates and persists every implemented ba
     expect(await batchRows.count()).toBeGreaterThan(2);
 
     // Bad rows block atomic persistence in the review screen.
-    await selectNativeFile(app, fixtures.bad);
+    chooseNativeFile(fileChooser, fixtures.bad);
     await page.getByRole("button", { name: "Importer un relevé" }).click();
     modal = page.getByRole("dialog", { name: "Contrôler le relevé bancaire" });
     await modal.getByTestId("bank-import-review").click();
@@ -264,7 +301,7 @@ test("Wheat 2.0 reviews, imports, deduplicates and persists every implemented ba
     await modal.getByRole("button", { name: "Fermer" }).click();
 
     // Legacy XLS is content-detected and rejected with an actionable message.
-    await selectNativeFile(app, fixtures.xls);
+    chooseNativeFile(fileChooser, fixtures.xls);
     await page.getByRole("button", { name: "Importer un relevé" }).click();
     await expect(page.locator(".op-notice")).toContainText("XLS binaire hérité", { timeout: 15000 });
 

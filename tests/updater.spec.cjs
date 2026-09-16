@@ -172,6 +172,124 @@ test("successful staged installation is confirmed only by the updated version af
   } finally { fs.rmSync(workspace.directory, { recursive: true, force: true }); }
 });
 
+test("a confirmed update stops storing the installer that produced it", async () => {
+  const workspace = temporaryWorkspace();
+  try {
+    writeRelease(workspace.feed);
+    const service = serviceFor(workspace, "2.1.0", true);
+    const ready = await offerThenDownload(service);
+    const stagedInstaller = ready.pending.artifactPath;
+    expect(fs.existsSync(stagedInstaller)).toBe(true);
+
+    // A Wheat installer is 300 MB to 1.4 GB. Before this, every update that
+    // actually installed left its own installer in the profile for good - found
+    // during release hardening as 1.39 GB of a superseded version still sitting
+    // in the profile's updater/staging directory. Nothing ever reads it again.
+    await service.installStagedUpdate(async () => undefined);
+    // Still there while the install is in flight: the helper is running it.
+    expect(fs.existsSync(stagedInstaller)).toBe(true);
+
+    const updated = serviceFor(workspace, "2.2.0", true);
+    expect((await updated.confirmSuccessfulStartup()).phase).toBe("updated");
+    expect(fs.existsSync(stagedInstaller)).toBe(false);
+    expect(fs.readdirSync(path.join(workspace.state, "staging"))).toEqual([]);
+  } finally { fs.rmSync(workspace.directory, { recursive: true, force: true }); }
+});
+
+test("the installer of a pending update survives housekeeping", async () => {
+  const workspace = temporaryWorkspace();
+  try {
+    writeRelease(workspace.feed);
+    // An abandoned download from a version that is no longer offered.
+    const orphan = path.join(workspace.state, "staging", "2.1.5");
+    fs.mkdirSync(orphan, { recursive: true });
+    fs.writeFileSync(path.join(orphan, "WheatSetup-2.1.5.exe"), "superseded installer");
+
+    const service = serviceFor(workspace, "2.1.0", true);
+    const ready = await offerThenDownload(service);
+    // Confirmation runs at every launch, including launches where an offer is
+    // waiting to be installed. Deleting *that* installer would make the ready
+    // update un-installable and silently re-download it.
+    await service.confirmSuccessfulStartup();
+    expect(fs.existsSync(ready.pending.artifactPath)).toBe(true);
+    expect(fs.existsSync(orphan)).toBe(false);
+  } finally { fs.rmSync(workspace.directory, { recursive: true, force: true }); }
+});
+
+test("an offer the running version has overtaken is dropped, not shown", async () => {
+  const workspace = temporaryWorkspace();
+  try {
+    writeRelease(workspace.feed);
+    const service = serviceFor(workspace, "2.1.0", true);
+    const ready = await offerThenDownload(service);
+    expect(ready.status.phase).toBe("ready");
+    expect(ready.status.availableVersion).toBe("2.2.0");
+
+    // The same profile, now running 2.2.0 because somebody installed it by hand
+    // - or switched edition, which is an ordinary in-place install of the other
+    // edition over this one. Telling them 2.2.0 is available would be false, and
+    // accepting it would be refused as a downgrade.
+    const afterManualInstall = serviceFor(workspace, "2.2.0", true);
+    const status = await afterManualInstall.getStatus();
+    expect(status.phase).toBe("up-to-date");
+    expect(status.availableVersion).toBeUndefined();
+    expect(status.currentVersion).toBe("2.2.0");
+
+    // And the installer it had staged for that version stops occupying the profile.
+    await afterManualInstall.confirmSuccessfulStartup();
+    expect(fs.existsSync(ready.pending.artifactPath)).toBe(false);
+  } finally { fs.rmSync(workspace.directory, { recursive: true, force: true }); }
+});
+
+test("a failed check cannot keep an overtaken offer alive", async () => {
+  const workspace = temporaryWorkspace();
+  try {
+    writeRelease(workspace.feed);
+    const service = serviceFor(workspace, "2.1.0", true);
+    await offerThenDownload(service);
+
+    // Now running 2.2.0, and the release host is unreachable. A failed check
+    // deliberately leaves the previous offer alone - so without this, the stale
+    // "2.2.0 available" survived in the `idle` phase and an installed 2.2.0 kept
+    // being told to install 2.2.0. Seen on a real machine after an edition
+    // switch.
+    const offline = new updater.UpdateService({
+      currentVersion: "2.2.0",
+      stateDirectory: workspace.state,
+      automaticInstallationEnabled: true,
+      provider: {
+        name: "offline",
+        requiresSignature: false,
+        getLatestRelease: async () => { throw new updater.UpdateNetworkError("no network"); },
+        acquireUpdate: async () => { throw new Error("unreachable"); },
+        validateUpdate: async () => undefined,
+      },
+    });
+    await offline.checkForUpdates({ automatic: true });
+    const status = await offline.getStatus();
+    expect(status.availableVersion).toBeUndefined();
+    expect(status.currentVersion).toBe("2.2.0");
+  } finally { fs.rmSync(workspace.directory, { recursive: true, force: true }); }
+});
+
+test("an offer that is still newer than the running version survives", async () => {
+  const workspace = temporaryWorkspace();
+  try {
+    writeRelease(workspace.feed, { version: "2.3.0" });
+    const service = serviceFor(workspace, "2.1.0", true);
+    const ready = await offerThenDownload(service);
+
+    // A partially updated install - 2.1.0 to 2.2.0 by hand - must keep the
+    // 2.3.0 offer it had already downloaded and verified.
+    const intermediate = serviceFor(workspace, "2.2.0", true);
+    const status = await intermediate.getStatus();
+    expect(status.phase).toBe("ready");
+    expect(status.availableVersion).toBe("2.3.0");
+    await intermediate.confirmSuccessfulStartup();
+    expect(fs.existsSync(ready.pending.artifactPath)).toBe(true);
+  } finally { fs.rmSync(workspace.directory, { recursive: true, force: true }); }
+});
+
 test("failed installation launch records recovery-safe error and leaves user data untouched", async () => {
   const workspace = temporaryWorkspace();
   try {

@@ -208,7 +208,7 @@ export async function extractBankStatementWithCloud(input: {
       throwIfAborted(input.signal);
       // The first page failing is a failed reading; a later page failing would
       // leave a statement with a hole in it, which must never look complete.
-      const described = describeCloudOcrFailure(error);
+      const described = describeCloudOcrFailure(error, "BANK_STATEMENT");
       throw new CloudOcrFailureError(
         pagesRead === 0
           ? described.message

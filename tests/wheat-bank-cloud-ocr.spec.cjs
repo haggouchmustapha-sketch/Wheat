@@ -306,6 +306,46 @@ test("a page that fails after the first one refuses the whole statement", async 
   })).rejects.toThrow(/incomplet/);
 });
 
+/*
+ * The sentence an accountant actually reads when the provider fails.
+ *
+ * Found by a real run against a real OpenRouter account: every free model was
+ * rate-limited or returned nothing, and Wheat told the accountant it would
+ * "utilise le moteur local en attendant" — a promise a Lightweight bank import
+ * cannot keep, because there is no local engine for a bank table. The advice
+ * has to be the one that always works.
+ */
+test("a provider failure on a statement never promises a local engine", () => {
+  for (const kind of ["EMPTY_RESPONSE", "PROVIDER_ERROR", "BAD_REQUEST"]) {
+    const described = cloud.describeCloudOcrFailure({ kind }, "BANK_STATEMENT");
+    expect(described.message, kind).not.toMatch(/moteur local/);
+    expect(described.message, kind).toMatch(/CSV, XLSX, OFX, MT940 ou CAMT\.053/);
+    // The document path keeps its own sentence, which is true there.
+    expect(cloud.describeCloudOcrFailure({ kind }).message, kind).toMatch(/moteur local/);
+  }
+});
+
+test("waiting on a quota or a rate limit points at the formats that need no reading", () => {
+  for (const kind of ["QUOTA_EXHAUSTED", "RATE_LIMITED", "MODEL_UNAVAILABLE"]) {
+    expect(cloud.describeCloudOcrFailure({ kind }, "BANK_STATEMENT").message, kind)
+      .toMatch(/CSV, XLSX, OFX, MT940 ou CAMT\.053/);
+    // And a document is never told about bank formats it cannot use.
+    expect(cloud.describeCloudOcrFailure({ kind }).message, kind).not.toMatch(/MT940/);
+  }
+});
+
+test("a statement that reaches the provider and fails reports it, and writes nothing", async () => {
+  const failure = Object.assign(new Error("free tier"), { kind: "RATE_LIMITED" });
+  const error = await extraction.extractBankStatementWithCloud({
+    runtime: runtime(failure),
+    pages: IMAGE_PAGE,
+    consentGiven: true,
+  }).catch((caught) => caught);
+  expect(error.name).toBe("CloudOcrFailureError");
+  expect(error.remedy).toBe("RETRY_LATER");
+  expect(error.message).toMatch(/CSV, XLSX, OFX, MT940 ou CAMT\.053/);
+});
+
 /* --------------------------------------------------- consent and authorisation */
 
 test("no consent and no connection are raised before any page is sent", async () => {

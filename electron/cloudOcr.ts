@@ -106,6 +106,18 @@ export class CloudOcrFailureError extends Error {
  */
 export type CloudOcrRemedy = "RETRY" | "RETRY_LATER" | "RECONNECT" | "MANAGE_ACCOUNT";
 
+/** What is being read. It changes the advice, never the diagnosis. */
+export type CloudOcrSubject = "DOCUMENT" | "BANK_STATEMENT";
+
+/**
+ * The formats a bank can export that need no reading at all.
+ *
+ * Named in every bank-statement failure, because it is the one remedy that
+ * always works: a statement Wheat cannot photograph-read today it can parse
+ * exactly, today, from the file the bank already offers.
+ */
+const MACHINE_READABLE_BANK_FORMATS = "CSV, XLSX, OFX, MT940 ou CAMT.053";
+
 /**
  * Turns a provider failure into something a person can read and act on.
  *
@@ -119,23 +131,42 @@ export type CloudOcrRemedy = "RETRY" | "RETRY_LATER" | "RECONNECT" | "MANAGE_ACC
  * The usage and the quota belong to the user's own provider account. Wheat says
  * so plainly, and never silently moves to a paid model to get around it.
  */
-export function describeCloudOcrFailure(error: unknown): { message: string; remedy: CloudOcrRemedy } {
+export function describeCloudOcrFailure(
+  error: unknown,
+  subject: CloudOcrSubject = "DOCUMENT",
+): { message: string; remedy: CloudOcrRemedy } {
+  const bank = subject === "BANK_STATEMENT";
+  /**
+   * The offer of a local reading, which only one of the two subjects has.
+   *
+   * A document always has somewhere else to go: Tesseract is packaged with both
+   * editions and reads it, less well, offline. A scanned bank statement does
+   * not — reconstructing a debit column is not something the fallback can do —
+   * so telling an accountant that Wheat will "use the local engine meanwhile"
+   * would be a promise this path cannot keep.
+   */
+  const instead = bank
+    ? ` Relancez la lecture, ou importez le relevé en ${MACHINE_READABLE_BANK_FORMATS}.`
+    : " Wheat utilise le moteur local en attendant.";
+  const waiting = bank ? ` Vous pouvez aussi importer le relevé en ${MACHINE_READABLE_BANK_FORMATS}.` : "";
+  const what = bank ? "du relevé" : "des pièces";
+
   const kind = (error as { kind?: string } | null)?.kind;
   switch (kind) {
     case "QUOTA_EXHAUSTED":
       return {
-        message: "Wheat Cloud AI a atteint la limite d'utilisation actuelle de ce compte. La lecture en ligne reprendra une fois la limite renouvelée.",
+        message: `Wheat Cloud AI a atteint la limite d'utilisation actuelle de ce compte. La lecture en ligne reprendra une fois la limite renouvelée.${waiting}`,
         remedy: "MANAGE_ACCOUNT",
       };
     case "RATE_LIMITED":
       return {
-        message: "Wheat Cloud AI reçoit trop de demandes en ce moment. Patientez quelques instants avant de relancer la lecture.",
+        message: `Wheat Cloud AI reçoit trop de demandes en ce moment. Patientez quelques instants avant de relancer la lecture.${waiting}`,
         remedy: "RETRY_LATER",
       };
     case "INVALID_KEY":
     case "UNAUTHORIZED":
       return {
-        message: "L'autorisation de Wheat Cloud AI n'est plus acceptée par le fournisseur. Reconnectez Wheat Cloud AI pour reprendre la lecture des pièces.",
+        message: `L'autorisation de Wheat Cloud AI n'est plus acceptée par le fournisseur. Reconnectez Wheat Cloud AI pour reprendre la lecture ${what}.`,
         remedy: "RECONNECT",
       };
     case "TIMEOUT":
@@ -146,24 +177,28 @@ export function describeCloudOcrFailure(error: unknown): { message: string; reme
     case "IMAGE_UNSUPPORTED":
     case "MODEL_UNAVAILABLE":
       return {
-        message: "Aucun modèle capable de lire une image n'est disponible actuellement sur ce compte. Réessayez plus tard ou vérifiez les réglages avancés.",
+        message: `Aucun modèle capable de lire une image n'est disponible actuellement sur ce compte. Réessayez plus tard ou vérifiez les réglages avancés.${waiting}`,
         remedy: "MANAGE_ACCOUNT",
       };
     case "SAFETY_REFUSAL":
       return {
-        message: "Le fournisseur a refusé d'analyser cette pièce. Corrigez la lecture manuellement, ou relancez avec une image plus nette.",
+        message: bank
+          ? `Le fournisseur a refusé d'analyser ce relevé. Relancez avec une image plus nette, ou importez le relevé en ${MACHINE_READABLE_BANK_FORMATS}.`
+          : "Le fournisseur a refusé d'analyser cette pièce. Corrigez la lecture manuellement, ou relancez avec une image plus nette.",
         remedy: "RETRY",
       };
     case "EMPTY_RESPONSE":
     case "PROVIDER_ERROR":
     case "BAD_REQUEST":
       return {
-        message: "Le service de lecture en ligne n'a pas pu analyser cette pièce. Relancez la lecture ; Wheat utilisera le moteur local en attendant.",
+        message: bank
+          ? `Le service de lecture en ligne n'a pas pu analyser ce relevé.${instead}`
+          : `Le service de lecture en ligne n'a pas pu analyser cette pièce.${instead}`,
         remedy: "RETRY",
       };
     default:
       return {
-        message: "La lecture en ligne n'a pas abouti. Vérifiez votre connexion, puis relancez la lecture.",
+        message: `La lecture en ligne n'a pas abouti. Vérifiez votre connexion, puis relancez la lecture.${waiting}`,
         remedy: "RETRY",
       };
   }

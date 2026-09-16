@@ -339,3 +339,43 @@ export function ocrEngineOrder(options: {
 export function requiresCloudRecognition(order: readonly OcrEngine[]): boolean {
   return order[0] === "cloud";
 }
+
+/**
+ * Who reads a page, for this build and these settings.
+ *
+ * Threaded through recognition rather than read from a module-level constant so
+ * that the decision is made once, by the caller, and every page of every
+ * document — or of every bank statement — in one import is read by the same
+ * engines in the same order. It is also what makes the whole path testable
+ * without an edition-specific build.
+ */
+export type RecognitionPlan = {
+  /**
+   * Engines to try, in order. The document pipeline always ends at the local
+   * Tesseract fallback; the bank importer stops before it, because a table
+   * nobody can trust is worse than a refusal (see `bankStatementImporter.ts`).
+   */
+  order: OcrEngine[];
+  cloud: { runtime: CloudOcrRuntime; consentGiven: boolean } | null;
+  /**
+   * Called when a cloud reading was attempted and did not work.
+   *
+   * The document is still read — the local fallback takes over — so this is not
+   * an error the import has to stop for. It is the difference between "Wheat
+   * read your invoice, less well than it could have, and never said why" and a
+   * sentence telling the accountant that their provider allowance is used up.
+   */
+  onCloudFailure?: (failure: { message: string; remedy: CloudOcrRemedy }) => void;
+};
+
+export function resolveRecognitionPlan(input: {
+  cloud?: { runtime: CloudOcrRuntime; enabled: boolean; consentGiven: boolean } | null;
+  hasBundledLocalOcr?: boolean;
+}): RecognitionPlan {
+  const cloud = input.cloud ?? null;
+  const order = ocrEngineOrder({
+    hasBundledLocalOcr: input.hasBundledLocalOcr,
+    cloudOcrEnabled: Boolean(cloud?.enabled),
+  });
+  return { order, cloud: cloud?.enabled ? { runtime: cloud.runtime, consentGiven: cloud.consentGiven } : null };
+}

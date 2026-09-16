@@ -312,10 +312,16 @@ test.describe("how the forms use it", () => {
     // never surface against another, nor against another bank account.
     expect(modal).toContain("draftKey: `${draft.bankAccountId}:${draft.sourceSha256}`");
 
-    // Only the mapping is held. `review` is the service's answer, recomputed
-    // rather than remembered; `allowDuplicates` is consent given against one
-    // review, and restoring it would pre-arm an import nobody re-authorised.
-    expect(modal).toContain("value: { mapping }");
+    // The unfinished work is held, and only that: the column mapping, and the
+    // corrections somebody typed over what the recogniser read off a scan.
+    // Both are slow to redo and neither authorises anything.
+    //
+    // `review` is not held \u2014 it is the service's answer, recomputed rather than
+    // remembered. Nor is `allowDuplicates`, which is consent given against one
+    // particular review; restoring it would pre-arm an import nobody
+    // re-authorised.
+    expect(modal).toContain("value: { mapping, cellEdits }");
+    expect(modal).not.toMatch(/value: \{[^}]*\b(?:review|allowDuplicates)\b/);
     const restore = modal.slice(modal.indexOf("onRestore: (payload) => {"));
     expect(restore.slice(0, 600)).toContain("setAllowDuplicates(false)");
     expect(restore.slice(0, 600)).toContain("setReview(null)");

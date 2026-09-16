@@ -35,7 +35,24 @@ declare global {
       excludeBankMovement: (payload: unknown) => Promise<any>;
       restoreBankMovement: (payload: unknown) => Promise<any>;
       selectBankStatementFile: () => Promise<{ name: string; extension: string; bytesBase64: string } | null>;
-      parseBankStatement: (payload: unknown) => Promise<any>;
+      /**
+       * Reads a statement file without writing anything.
+       *
+       * Resolves to the parsed statement, or — when a scanned statement needs
+       * the cloud reader and this machine has not authorised one yet — to
+       * `cloudAuthorization`, so the interface can ask once and parse the very
+       * same file again. `cloudFailure` is a reading that started and did not
+       * finish, stated in a way the person can act on.
+       */
+      parseBankStatement: (payload: unknown) => Promise<any & {
+        cloudAuthorization?: { required: boolean; reason: "NOT_CONNECTED" | "CONSENT_REQUIRED" };
+        cloudFailure?: { message: string; remedy: string };
+        cloudNotices?: Array<{ message: string; remedy: string }>;
+      }>;
+      /** Stops a reading in flight. Nothing was written, so nothing is undone. */
+      cancelBankStatementRead?: () => Promise<{ cancelled: boolean }>;
+      /** One event per page while a scanned statement is read in the cloud. */
+      onBankStatementProgress?: (listener: (payload: any) => void) => () => void;
       reviewBankStatement: (payload: unknown) => Promise<any>;
       importBankStatement: (payload: unknown) => Promise<any>;
       setBankLedgerAccount: (payload: unknown) => Promise<any>;

@@ -229,6 +229,52 @@ test("a statement the local reader finishes on its own is never sent to a model"
   expect(incomplete).toEqual([]);
 });
 
+/**
+ * Standard still reads this statement on the machine, with nothing switched on
+ * and nothing sent anywhere.
+ *
+ * The edition-aware routing added for Lightweight must not have quietly turned
+ * Standard into a cloud client. Even with a provider configured *and* consent
+ * given — the most permissive Standard setup there is — a scanned statement the
+ * local engine can read is read by the local engine, and the provider is never
+ * called. Uploading somebody's bank statement is not a fallback to apply
+ * quietly; it is a thing they ask for.
+ */
+test("Standard reads this scan locally even with a provider connected", async () => {
+  test.skip(Boolean(skipReason), skipReason);
+  const cloud = tsxRequire(path.join(root, "electron", "cloudOcr.ts"), __filename);
+  const calls = [];
+  const plan = cloud.resolveRecognitionPlan({
+    hasBundledLocalOcr: true,
+    cloud: {
+      enabled: true,
+      consentGiven: true,
+      runtime: {
+        isConnected: () => true,
+        runVision: async (request) => {
+          calls.push(request);
+          throw new Error("the cloud must not have been asked");
+        },
+      },
+    },
+  });
+  expect(plan.order).toEqual(["paddle", "cloud", "tesseract"]);
+
+  const local = await importer.parseBankStatement({
+    sourceName: path.basename(STATEMENT),
+    bytesBase64: fs.readFileSync(STATEMENT).toString("base64"),
+    app: stubApp(),
+    recognition: plan,
+  });
+
+  expect(calls).toEqual([]);
+  expect(local.ocr.local).toBe(true);
+  expect(local.format).toBe("PDF_OCR");
+  // The reading was complete, so there is nothing to offer a cloud re-reading for.
+  expect(local.ocr.cloudOffer).toBeUndefined();
+  expect(local.canonicalRows.filter((row) => row.rowClass === "TRANSACTION").length).toBe(5);
+});
+
 /*
  * The other half of the same defect: the pipeline emitted this provenance and
  * the import dialog read none of it. Pinned by reading the screen's source,

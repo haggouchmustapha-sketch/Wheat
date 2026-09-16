@@ -57,13 +57,41 @@ const CLOUD_DISCLOSURE = [
   "Le texte reconnu vous est toujours soumis avant toute écriture comptable : rien n'est enregistré sans votre vérification.",
 ] as const;
 
+/**
+ * The same promise, said about a bank statement.
+ *
+ * The facts are identical — the pages go, the accounting stays, a person
+ * confirms — but naming what is actually on those pages is the difference
+ * between informed consent and a dialog somebody clicked past.
+ */
+const BANK_DISCLOSURE = [
+  "Pour lire un relevé bancaire scanné, Wheat envoie les images de ses pages au fournisseur d'IA que vous autorisez, qui les retranscrit et renvoie le tableau des lignes.",
+  "Un relevé bancaire porte le nom de vos contreparties, vos références d'opérations, vos montants et vos soldes. Le fournisseur les traite selon ses propres conditions.",
+  "Seul le relevé que vous importez est envoyé. Votre comptabilité — écritures, journaux, balances, sauvegardes — reste sur cet ordinateur et n'est jamais transmise.",
+  "Aucun mouvement n'est créé ni rapproché automatiquement : les lignes lues vous sont soumises, modifiables, et rien n'est enregistré sans votre confirmation.",
+] as const;
+
 /* -------------------------------------------------------------- the gate */
 
 export type CloudGate = {
   /** Why the import stopped: no connection yet, or no consent yet. */
   reason: "NOT_CONNECTED" | "CONSENT_REQUIRED";
-  /** The documents the person already chose. They never choose them again. */
+  /** The files the person already chose. They never choose them again. */
   filePaths: string[];
+  /**
+   * What is waiting on the authorisation.
+   *
+   * A bank statement is not a pièce: it carries every counterparty a business
+   * dealt with and every amount that moved, and somebody about to send one
+   * deserves to be told that in those words rather than read about "pièces".
+   * Defaults to documents, which is what asked first and asks most often.
+   */
+  subject?: "DOCUMENT" | "BANK_STATEMENT";
+  /**
+   * Resumes the work that stopped. Supplied when the caller holds more than a
+   * list of paths — a statement resumes into its own bank account and file.
+   */
+  resume?: () => void;
 };
 
 /**
@@ -87,6 +115,7 @@ export function WheatCloudGateDialog({
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const statement = gate.subject === "BANK_STATEMENT";
 
   const enable = async () => {
     const api = bridge();
@@ -106,7 +135,12 @@ export function WheatCloudGateDialog({
         status = await api.authorizeCloud();
       }
       if (!status.connected) throw new Error("La connexion n'a pas abouti. Relancez l'activation depuis cette fenêtre.");
-      notify?.("Wheat Cloud AI est connecté. La lecture de vos pièces reprend.", "success");
+      notify?.(statement
+        ? "Wheat Cloud AI est connecté. La lecture de votre relevé reprend."
+        : "Wheat Cloud AI est connecté. La lecture de vos pièces reprend.", "success");
+      // The caller that knows what was interrupted resumes it; `onResume`
+      // always runs, because closing this dialog is the caller's business too.
+      gate.resume?.();
       onResume(gate.filePaths);
     } catch (authorizationError) {
       setError(authorizationError instanceof Error ? authorizationError.message : "L'activation n'a pas abouti.");
@@ -116,14 +150,19 @@ export function WheatCloudGateDialog({
   };
 
   const count = gate.filePaths.length;
+  const disclosure = statement ? BANK_DISCLOSURE : CLOUD_DISCLOSURE;
 
   return (
     <Dialog
       icon={<Cloud size={18} aria-hidden="true" />}
-      title="Activer Wheat Cloud AI pour lire vos pièces"
-      note={count === 1
-        ? "Votre pièce est prête. Il manque une autorisation, puis la lecture reprend toute seule."
-        : `Vos ${count} pièces sont prêtes. Il manque une autorisation, puis la lecture reprend toute seule.`}
+      title={statement
+        ? "Activer Wheat Cloud AI pour lire ce relevé"
+        : "Activer Wheat Cloud AI pour lire vos pièces"}
+      note={statement
+        ? "Votre relevé est prêt. Il manque une autorisation, puis la lecture reprend toute seule."
+        : count === 1
+          ? "Votre pièce est prête. Il manque une autorisation, puis la lecture reprend toute seule."
+          : `Vos ${count} pièces sont prêtes. Il manque une autorisation, puis la lecture reprend toute seule.`}
       onClose={busy ? () => undefined : onCancel}
       footer={
         <>
@@ -138,7 +177,7 @@ export function WheatCloudGateDialog({
       <div className="wt-stack">
         <Callout tone="info" icon={<ShieldCheck size={16} aria-hidden="true" />} title="Ce que Wheat envoie, et ce qu'il n'envoie pas">
           <ul className="wt-bullets">
-            {CLOUD_DISCLOSURE.map((line) => <li key={line}>{line}</li>)}
+            {disclosure.map((line) => <li key={line}>{line}</li>)}
           </ul>
         </Callout>
         <p className="wt-hint">

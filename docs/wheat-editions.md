@@ -135,6 +135,10 @@ The edition is a separate word in the name, **never a separate version number**.
 | Lightweight, cloud reading on (default) | `cloud` → `tesseract` |
 | Lightweight, cloud reading off | `tesseract` |
 
+A scanned **bank statement** follows the same order with one exception: it
+never falls through to Tesseract, and in Standard a cloud reading happens only
+on an explicit request. See *Scanned bank statements* below.
+
 Every plan ends at the local Tesseract fallback, so a machine with no
 connection still reads what it can instead of refusing the document.
 
@@ -157,6 +161,61 @@ no usable transcription is a recognition **failure**, not an empty page — fili
 a document as "read, and blank" is the one outcome nobody reviews.
 
 `tests/wheat-cloud-ocr-unit.spec.cjs` covers each of those branches.
+
+### Scanned bank statements
+
+A bank statement is read by the same engines, chosen the same way, and is then
+deliberately stricter than a document — because a misread invoice costs somebody
+five minutes and a misread statement silently changes what a business believes
+it has.
+
+| build and settings | who reads a scanned statement |
+|---|---|
+| Standard | the local engine; a cloud reading only when the accountant asks for it by name |
+| Lightweight, cloud reading on (default) | the authorised provider, as the primary engine |
+| Lightweight, cloud reading off | nobody — Wheat says so, and names the machine-readable formats |
+
+Two differences from the document path are intentional.
+
+**There is no Tesseract fallback.** Reading prose off a photograph is one thing;
+reconstructing a debit column from it is another, and a table nobody can trust is
+worse for an accountant than a clear refusal.
+
+**Standard never uploads a statement on its own.** Enabling cloud reading in
+settings is permission, not an instruction. When the local engine leaves a
+movement row unusable, the review screen *offers* a cloud reading and the
+accountant asks for it; nothing leaves the machine until they do.
+`electron/bankStatementImporter.ts` asks the capability question
+(`plan.order.includes("paddle")`) rather than reading the order's first entry, so
+a Lightweight build never reaches for a runtime its installer left out — not when
+the cloud is first, and not when cloud reading has been switched off.
+
+The provider is asked for **a transcription of rows**, never for a judgement.
+Every decision that could turn a transcription into a wrong ledger is made
+afterwards, deterministically, in `electron/bankStatementCloudExtraction.ts`:
+
+- money is carried as the characters printed on the page and parsed downstream by
+  the existing exact-decimal reader — no arithmetic happens in that module, and no
+  floating-point value ever represents a posted amount;
+- a row offered with **both** a debit and a credit, or with **neither**, is kept
+  and reported as a blocking issue, never assigned to the likelier column;
+- opening and closing balances, subtotals, page carry-forwards and headers are
+  recognised and kept *out* of the movement table, and the balances are reported
+  as read text rather than fed to Wheat's balance check — a number read off a scan
+  is not a declaration, and `declaredBalances` stays absent;
+- a row whose nature could not be established, a value that is not a number, and a
+  page that failed all become named issues; nothing is dropped in silence.
+
+The result becomes an ordinary bank table and travels the one road Wheat has:
+the same column mapping, `normalizeStatementRows`, duplicate detection, balance
+equation, preview, explicit confirmation and import history as a CSV from the
+same bank. There is no AI-specific persistence. Every cell is editable in the
+review screen, because every cell is a proposal; **AI recognition never imports,
+reconciles or posts anything.**
+
+`tests/wheat-bank-cloud-ocr.spec.cjs` covers the routing and each safety rule;
+`tests/wheat-bank-cloud-import-e2e.spec.cjs` takes a cloud-read statement through
+validation into the books and back out after a restart.
 
 ---
 

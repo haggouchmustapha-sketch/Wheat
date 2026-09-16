@@ -34,6 +34,13 @@ const wheat = {
   restoreBankMovement: (payload: unknown) => ipcRenderer.invoke("wheat:bank:movement:restore", payload),
   selectBankStatementFile: () => ipcRenderer.invoke("wheat:bank:statement:select-file"),
   parseBankStatement: (payload: unknown) => ipcRenderer.invoke("wheat:bank:statement:parse", payload),
+  cancelBankStatementRead: () => ipcRenderer.invoke("wheat:bank:statement:cancel-read"),
+  /** Page-by-page progress of a cloud reading of a scanned statement. */
+  onBankStatementProgress: (listener: (payload: unknown) => void) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, payload: unknown) => listener(payload);
+    ipcRenderer.on("wheat:bank:statement:progress", wrapped);
+    return () => ipcRenderer.removeListener("wheat:bank:statement:progress", wrapped);
+  },
   reviewBankStatement: (payload: unknown) => ipcRenderer.invoke("wheat:bank:statement:review", payload),
   importBankStatement: async (payload: unknown) => {
     const prepared = await ipcRenderer.invoke("wheat:bank:statement:prepare", payload);

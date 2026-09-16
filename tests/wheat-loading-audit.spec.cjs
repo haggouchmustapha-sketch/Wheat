@@ -65,13 +65,25 @@ test("the shared indicator is a status region, not an alert that steals focus", 
 
 test("no surface invents progress it does not measure", () => {
   const banner = APP.slice(APP.indexOf("function RunningTaskBanner"), APP.indexOf("function ToastStack"));
-  // No percentage, no width-driven bar: nothing here knows how far along it is.
-  expect(banner).not.toMatch(/%|progress|value=|max=/);
+  // No percentage and no width-driven bar. The banner may show a count of real
+  // units of work \u2014 pages read, documents filed \u2014 because those are things the
+  // main process reports as they happen; it may never show a fraction of a
+  // whole nobody measured, which is what a percentage or a filling bar claims.
+  expect(banner).not.toMatch(/%/);
+  expect(banner).not.toContain("<progress");
+  expect(banner).not.toMatch(/\bmax=|value=/);
 
-  // The one place that does show progress measures it, from events the main
-  // process actually sends per document.
+  // What it does show is passed in, never computed here, and never shown at
+  // all unless the count it came from is real.
+  expect(banner).toContain("progress.completed}/${progress.total}");
+  expect(banner).toContain("progress.total > 0");
+
+  // And both sources of that count are event streams the main process actually
+  // emits \u2014 one event per document filed, one per statement page read.
   expect(APP).toContain("onSmartOcrProgress");
+  expect(APP).toContain("onBankStatementProgress");
   expect(APP).toMatch(/completed: Number\(event\.completed/);
+  expect(APP).toMatch(/const completed = Number\(event\?\.completed/);
 });
 
 /*

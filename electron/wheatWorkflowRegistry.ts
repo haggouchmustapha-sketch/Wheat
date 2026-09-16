@@ -321,6 +321,8 @@ export const WHEAT_WORKFLOW_REGISTRY: readonly WheatWorkflowDefinition[] = Objec
   exempt("bank.reconciliation_workspace", "wheat:bank:reconciliation:workspace", "Ouvrir le rapprochement", "BankMovement", READ_ONLY),
   exempt("bank.reconciliation_candidates", "wheat:bank:reconciliation:candidates", "Calculer les candidats de rapprochement", "BankMovement", READ_ONLY),
   exempt("bank.statement_parse", "wheat:bank:statement:parse", "Analyser un relevé", "BankStatementImport", READ_ONLY),
+  exempt("bank.statement_cancel_read", "wheat:bank:statement:cancel-read", "Annuler la lecture d'un releve", "BankStatementImport", READ_ONLY),
+  exempt("bank.statement_progress", "wheat:bank:statement:progress", "Suivre la lecture d'un releve", "BankStatementImport", READ_ONLY),
   exempt("bank.statement_review", "wheat:bank:statement:review", "Contrôler un relevé avant import", "BankStatementImport", READ_ONLY),
   exempt("portfolio.overview", "wheat:portfolio:overview", "Lire l'état de tous les dossiers", "Report", READ_ONLY),
   exempt("reporting.entries", "wheat:reporting:entries", "Rechercher des écritures", "Entry", READ_ONLY),

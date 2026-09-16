@@ -4,15 +4,24 @@ import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import type { App } from "electron";
 import type { StatementColumnMapping } from "./reconciliation";
 import { isPaddleOcrVl16Installed, recognizeWithPaddle, type PaddleOcrResult } from "./paddleOcr";
 import { normalizeFlexibleDate } from "./dateNormalization21";
 import { classifyStatementRow, inferStatementYear, looksLikeStatementAmount } from "./reconciliation";
 import { completeBankTableWithAi, incompleteMovementRows } from "./bankStatementAiFallback";
+import {
+  extractBankStatementWithCloud,
+  MAX_CLOUD_STATEMENT_PAGES,
+  type CloudBankExtraction,
+} from "./bankStatementCloudExtraction";
+import { CloudOcrUnavailableError, type RecognitionPlan } from "./cloudOcr";
 import type { AiReviewChat } from "./ocrAiReview";
+import { buildCloudImage, renderPdfPages, resolvePdfWorkerUrl } from "./pageImages";
 import { readWheatEnv } from "./runtimeEnvironment";
+
+/** The one-way channel a cloud reading reports its page progress on. */
+export const BANK_STATEMENT_PROGRESS_CHANNEL = "wheat:bank:statement:progress";
 
 const MAX_SOURCE_BYTES = 25_000_000;
 const MAX_ROWS = 2_000;
@@ -100,7 +109,8 @@ export interface ParsedBankStatement {
     engineVersion: string;
     confidence: number;
     pageCount: number;
-    local: true;
+    /** False when the pages were read by the provider the user authorised. */
+    local: boolean;
     confidenceDimensions: CanonicalBankTransaction["confidence"];
     fallbackRecommended: boolean;
     /**
@@ -108,7 +118,42 @@ export interface ParsedBankStatement {
      * Always shown for review: nothing here was read directly off the page.
      */
     assistedRows?: number[];
+    /** Present when the pages themselves were read by the cloud provider. */
+    cloud?: CloudBankReading;
+    /**
+     * Offered when the local engine could not finish and a cloud reading is
+     * configured on this machine. Acting on it is an explicit choice: nothing
+     * is uploaded until the accountant asks for it.
+     */
+    cloudOffer?: BankCloudOffer;
   };
+}
+
+/**
+ * What a cloud reading of a scanned statement carries into the review.
+ *
+ * Everything an accountant needs to judge the proposal without opening the
+ * provider's account: who read it, how much of it was read, what it refused,
+ * and what it could not settle. `blockingIssues` is not advisory — the review
+ * screen refuses confirmation while any remain.
+ */
+export type CloudBankReading = {
+  provider: string;
+  modelId: string;
+  pagesRead: number;
+  /** Row-level provenance, 1-based against the produced table. */
+  evidence: CloudBankExtraction["evidence"];
+  blockingIssues: string[];
+  /** Balances printed on the pages, for the accountant to confirm and apply. */
+  readBalances: CloudBankExtraction["readBalances"];
+};
+
+export type BankCloudOffer = {
+  /** Why the offer exists: nothing was read, or what was read is unusable. */
+  reason: "LOCAL_FAILED" | "LOCAL_INCOMPLETE";
+  detail: string;
+  /** True when the privacy consent has not been given on this machine yet. */
+  consentRequired: boolean;
 }
 
 export interface ParseBankStatementInput {
@@ -122,12 +167,48 @@ export interface ParseBankStatementInput {
    * a scanned statement is read entirely by the local path, exactly as before.
    */
   aiFallback?: AiReviewChat;
+  /**
+   * Who reads a scanned statement, for this build and these settings.
+   *
+   * The same plan the document pipeline uses, resolved once by the main process
+   * so one import cannot read half its pages locally and half in the cloud.
+   * Absent means the local engine only, which is exactly how Wheat behaved
+   * before cloud recognition existed.
+   */
+  recognition?: RecognitionPlan;
+  /**
+   * An accountant explicitly asking for this statement to be read in the cloud.
+   *
+   * Only ever set by the review screen's own "read this with Wheat Cloud AI"
+   * action. A build that can read locally never uploads a bank statement
+   * without it — enabling cloud reading in settings is permission, not an
+   * instruction, and a bank statement is not an invoice.
+   */
+  cloudRequested?: boolean;
+  /** Reports page-by-page progress of a cloud reading. */
+  onCloudProgress?: (event: { page: number; completed: number; total: number }) => void;
+  /** Cancels a reading in flight. A cancelled import writes nothing. */
+  signal?: AbortSignal;
 }
 
 type ParsedTable = { headers: string[]; rows: Array<Record<string, string>>; warnings: string[] };
 type ParsedPdfTable = ParsedTable & {
   ocr?: ParsedBankStatement["ocr"];
   currency?: string | null;
+  /**
+   * Movement rows the reading left unusable — no date, or no amount on either
+   * side. What decides whether a cloud re-reading is worth offering.
+   */
+  incompleteRows?: number[];
+};
+
+/** Everything the scanned paths need that is not the file itself. */
+type ScannedStatementOptions = {
+  aiFallback?: AiReviewChat;
+  recognition?: RecognitionPlan;
+  cloudRequested?: boolean;
+  onCloudProgress?: ParseBankStatementInput["onCloudProgress"];
+  signal?: AbortSignal;
 };
 
 const STANDARD_HEADERS = ["Date", "Value Date", "Description", "Reference", "External ID", "Amount", "Currency"];
@@ -434,19 +515,7 @@ function parseCamt053(text: string): { rows: Array<Record<string, string>>; curr
   return { rows, currency: detectedCurrency, warnings: [] };
 }
 
-function resolvePdfWorkerUrl(app?: App): string {
-  const packaged = Boolean(app?.isPackaged);
-  const candidates = packaged
-    ? [
-      path.join(process.resourcesPath, "ocr", "pdf.worker.mjs"),
-      path.join(process.resourcesPath, "app.asar.unpacked", "node_modules", "pdf-parse", "dist", "worker", "pdf.worker.mjs"),
-    ]
-    : [path.join(process.cwd(), "node_modules", "pdf-parse", "dist", "worker", "pdf.worker.mjs")];
-  const found = candidates.find((candidate) => fs.existsSync(candidate));
-  return found ? pathToFileURL(found).toString() : "";
-}
-
-async function parsePdf(bytes: Buffer, app?: App, aiFallback?: AiReviewChat): Promise<ParsedPdfTable> {
+async function parsePdf(bytes: Buffer, app: App | undefined, options: ScannedStatementOptions): Promise<ParsedPdfTable> {
   const { PDFParse } = await import("pdf-parse");
   const workerUrl = resolvePdfWorkerUrl(app);
   if (workerUrl && typeof PDFParse.setWorker === "function") PDFParse.setWorker(workerUrl);
@@ -465,9 +534,9 @@ async function parsePdf(bytes: Buffer, app?: App, aiFallback?: AiReviewChat): Pr
     const text = String(textResult.text ?? "").split("\u0000").join("").trim();
     if (text.replace(/\s/g, "").length < 40) {
       if (!app) {
-        throw userError("Ce PDF ne contient pas de couche texte fiable. Un relevé scanné exige PaddleOCR local et une vérification humaine avant import.");
+        throw userError("Ce PDF ne contient pas de couche texte fiable. Un relevé scanné doit être lu par reconnaissance, ce qui n'est pas disponible ici.");
       }
-      return parseScannedPdfWithPaddle(bytes, app, ".pdf", aiFallback);
+      return parseScannedStatement(bytes, app, ".pdf", options);
     }
     const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
     const headerIndex = lines.findIndex((line) => Boolean(detectSeparator(line)) && /date/i.test(line));
@@ -483,7 +552,7 @@ async function parsePdf(bytes: Buffer, app?: App, aiFallback?: AiReviewChat): Pr
   }
 }
 
-async function parseScannedPdfWithPaddle(bytes: Buffer, app: App, extension = ".pdf", aiFallback?: AiReviewChat): Promise<ParsedPdfTable> {
+async function parseScannedStatementLocally(bytes: Buffer, app: App, extension: string, aiFallback?: AiReviewChat): Promise<ParsedPdfTable> {
   let result: PaddleOcrResult;
   try {
     result = await recognizeWithPaddle(app, bytes, { mode: "structure", extension });
@@ -523,9 +592,7 @@ async function parseScannedPdfWithPaddle(bytes: Buffer, app: App, extension = ".
    * cannot use. If none exists, no model is asked anything and the statement is
    * read entirely on this machine, which is the ordinary case.
    */
-  const aiRowNumbers = aiFallback
-    ? incompleteMovementRows(table, suggestStatementMapping(table.headers), (row) => classifyStatementRow(row, {}) === "TRANSACTION")
-    : [];
+  const aiRowNumbers = aiFallback ? unusableMovementRows(table) : [];
   let aiAssist: { applied: boolean; filledRows: number[] } = { applied: false, filledRows: [] };
   if (aiFallback && aiRowNumbers.length) {
     const completion = await completeBankTableWithAi({
@@ -552,10 +619,15 @@ async function parseScannedPdfWithPaddle(bytes: Buffer, app: App, extension = ".
     ...result.warnings,
   ];
   const currency = /\b(MAD|EUR|USD|GBP|CAD|CHF|AED|SAR)\b/i.exec(result.text)?.[1]?.toUpperCase() ?? null;
+  // Measured again on the finished table: the assisted pass may have completed
+  // some of the rows counted above, and what matters here is what is still
+  // unusable — that, and only that, is what a cloud re-reading would be for.
+  const incompleteRows = unusableMovementRows(table);
   return {
     ...table,
     warnings,
     currency,
+    incompleteRows,
     ocr: {
       engine,
       engineVersion,
@@ -565,6 +637,220 @@ async function parseScannedPdfWithPaddle(bytes: Buffer, app: App, extension = ".
       confidenceDimensions: ocrConfidenceDimensions(result, table),
       fallbackRecommended: confidence < 75 || table.warnings.length > Math.max(3, table.rows.length / 4),
       assistedRows: aiAssist.filledRows,
+    },
+  };
+}
+
+/**
+ * Reads a scanned statement with the provider the user authorised.
+ *
+ * The AI looks at the **pages**, not at somebody else's failed transcription of
+ * them. That is the whole point: the previous assisted pass could only fill
+ * gaps in a table PaddleOCR had already built, so on a machine with no
+ * PaddleOCR there was no table to fill and no reading at all.
+ *
+ * Pages are prepared exactly as the document pipeline prepares them - the same
+ * rotation, the same ceiling, the same encoding - and the reply is turned into
+ * the ordinary bank table every other parser here produces.
+ */
+async function parseScannedStatementWithCloud(
+  bytes: Buffer,
+  app: App,
+  extension: string,
+  plan: RecognitionPlan,
+  options: ScannedStatementOptions,
+): Promise<ParsedPdfTable> {
+  const cloud = plan.cloud;
+  if (!cloud) throw new CloudOcrUnavailableError("NOT_CONNECTED");
+  // Asked before a single page is rendered, exactly as the document pipeline
+  // asks it. Rasterising eight pages and only then discovering there is nobody
+  // to send them to wastes the machine's time and the accountant's, and the
+  // interface needs the question early enough to resume this same import.
+  if (!cloud.consentGiven) throw new CloudOcrUnavailableError("CONSENT_REQUIRED");
+  if (!cloud.runtime.isConnected()) throw new CloudOcrUnavailableError("NOT_CONNECTED");
+
+  const prepared: Array<{ page: number; mimeType: string; base64: string }> = [];
+  let pageCount = 1;
+  let truncated = false;
+  if (extension === ".pdf") {
+    const rendered = await renderPdfPages(bytes, { app, limit: MAX_CLOUD_STATEMENT_PAGES });
+    if (!rendered.pages.length) {
+      throw userError("Les pages de ce PDF n'ont pas pu être rendues pour la lecture. Fournissez le relevé en CSV, XLSX, OFX, MT940 ou CAMT.053.");
+    }
+    pageCount = rendered.pageCount;
+    truncated = rendered.truncated;
+    for (const page of rendered.pages) {
+      const image = await buildCloudImage(page.buffer);
+      prepared.push({ page: page.page, mimeType: "image/jpeg", base64: image.buffer.toString("base64") });
+    }
+  } else {
+    const image = await buildCloudImage(bytes);
+    prepared.push({ page: 1, mimeType: "image/jpeg", base64: image.buffer.toString("base64") });
+  }
+
+  const extraction = await extractBankStatementWithCloud({
+    runtime: cloud.runtime,
+    pages: prepared,
+    consentGiven: cloud.consentGiven,
+    signal: options.signal,
+    onPage: options.onCloudProgress,
+  });
+
+  const table: ParsedTable = {
+    headers: extraction.headers,
+    rows: extraction.rows,
+    warnings: [
+      ...extraction.warnings,
+      `Relevé scanné lu par ${extraction.provider} (${extraction.modelId}) sur ${extraction.pagesRead} page(s) : chaque ligne est une proposition à vérifier avant confirmation.`,
+      ...(truncated
+        ? [`Ce relevé compte ${pageCount} pages ; seules les ${MAX_CLOUD_STATEMENT_PAGES} premières ont été lues. Importez les pages suivantes séparément, ou fournissez un export CSV/OFX/CAMT.053.`]
+        : []),
+    ],
+  };
+  const repaired = repairOcrMoneyColumns(table);
+  const confidence = extraction.confidence;
+  return {
+    ...repaired,
+    currency: extraction.currency,
+    incompleteRows: unusableMovementRows(repaired),
+    ocr: {
+      engine: `Wheat Cloud AI · ${extraction.provider}`,
+      engineVersion: extraction.modelId,
+      confidence,
+      pageCount,
+      local: false,
+      confidenceDimensions: cloudConfidenceDimensions(extraction, repaired),
+      fallbackRecommended: confidence < 75 || extraction.blockingIssues.length > 0,
+      cloud: {
+        provider: extraction.provider,
+        modelId: extraction.modelId,
+        pagesRead: extraction.pagesRead,
+        evidence: extraction.evidence,
+        blockingIssues: [
+          ...extraction.blockingIssues,
+          ...(truncated
+            ? [`Seules ${MAX_CLOUD_STATEMENT_PAGES} des ${pageCount} pages ont été lues : ce relevé serait importé de façon incomplète.`]
+            : []),
+        ],
+        readBalances: extraction.readBalances,
+      },
+    },
+  };
+}
+
+/**
+ * How sure the cloud reading was, in the terms the review screen already shows.
+ *
+ * Layout is not measurable here - a transcription carries no page geometry - so
+ * it is reported as unknown rather than as a flattering number. Row
+ * reconstruction is scored on what Wheat had to refuse or could not settle,
+ * which is the honest question for this path.
+ */
+function cloudConfidenceDimensions(extraction: CloudBankExtraction, table: ParsedTable): CanonicalBankTransaction["confidence"] {
+  const mapping = suggestStatementMapping(table.headers);
+  const mapped = [mapping.date, mapping.label, mapping.amount || mapping.debit, mapping.amount || mapping.credit].filter(Boolean).length;
+  const fieldMapping = Math.round((mapped / 4) * 100);
+  const rowReconstruction = Math.round(Math.max(0, 100 - (extraction.blockingIssues.length / Math.max(1, table.rows.length)) * 100));
+  return {
+    textRecognition: extraction.confidence,
+    layout: null,
+    rowReconstruction,
+    fieldMapping,
+    accountingConsistency: null,
+    finalDocument: Math.round(extraction.confidence * 0.45 + rowReconstruction * 0.35 + fieldMapping * 0.2),
+  };
+}
+
+/**
+ * Who reads this scanned statement, and what happens when they cannot.
+ *
+ * The one place the edition influences a bank import. It chooses the engine and
+ * never what the reading means: whatever answers, the table it produces goes
+ * through the same mapping, validation, duplicate detection, balance check,
+ * preview and confirmation as a CSV from the same bank.
+ *
+ *   - **Standard** reads locally, exactly as it always has. A cloud reading is
+ *     an alternative the accountant asks for by name; it never happens on its
+ *     own, because uploading somebody's bank statement is not a fallback to
+ *     apply quietly when a local engine has a bad page.
+ *   - **Lightweight** reads in the cloud, because no local recognition runtime
+ *     is packaged with it. Missing authorisation is raised before any page is
+ *     prepared, so the interface can obtain it and resume this same import.
+ *
+ * Neither edition falls back to Tesseract here. Reading prose off a photograph
+ * is one thing; reconstructing a debit column from it is another, and a table
+ * nobody can trust is worse for an accountant than a clear refusal.
+ */
+async function parseScannedStatement(
+  bytes: Buffer,
+  app: App,
+  extension: string,
+  options: ScannedStatementOptions,
+): Promise<ParsedPdfTable> {
+  const plan = options.recognition;
+  const cloudConfigured = Boolean(plan?.cloud);
+  /*
+   * Whether this build has a local recogniser at all.
+   *
+   * The capability question, not the order of the list. An edition that does
+   * not package PaddleOCR must never reach for it — not when the cloud is
+   * first, and not when the accountant has switched cloud reading off, which
+   * is the case that would otherwise fall straight through to the error this
+   * whole path exists to remove.
+   *
+   * No plan at all means the caller wants the local reader, which is what
+   * Wheat did before recognition became a choice.
+   */
+  const localAvailable = plan ? plan.order.includes("paddle") : true;
+
+  if (!localAvailable) {
+    if (cloudConfigured) return parseScannedStatementWithCloud(bytes, app, extension, plan!, options);
+    // Nothing on this machine can read a scanned statement, and saying which
+    // component is missing would name one this edition never ships. What the
+    // accountant can actually do is the only useful sentence here.
+    throw userError(
+      "Cette édition de Wheat lit les relevés scannés avec Wheat Cloud AI, et la lecture en ligne est désactivée sur ce poste. "
+      + "Activez-la dans Réglages > Wheat Cloud AI, ou importez le relevé dans un format lisible directement : CSV, XLSX, OFX, MT940 ou CAMT.053.",
+    );
+  }
+
+  let local: ParsedPdfTable;
+  try {
+    local = await parseScannedStatementLocally(bytes, app, extension, options.aiFallback);
+  } catch (localError) {
+    // Nothing was read. An explicit request is honoured; otherwise the refusal
+    // says what happened and what the accountant can do about it, which now
+    // includes a cloud reading they can ask for.
+    if (cloudConfigured && options.cloudRequested) {
+      return parseScannedStatementWithCloud(bytes, app, extension, plan!, options);
+    }
+    throw localError instanceof Error && localError.name === "BankStatementImportError"
+      ? userError(`${localError.message}${cloudConfigured
+        ? " Vous pouvez demander une lecture par Wheat Cloud AI, ou fournir le relevé en CSV, XLSX, OFX, MT940 ou CAMT.053."
+        : " Fournissez le relevé en CSV, XLSX, OFX, MT940 ou CAMT.053, ou activez la lecture par Wheat Cloud AI dans Réglages."}`)
+      : localError;
+  }
+
+  const incomplete = local.incompleteRows ?? [];
+  if (!incomplete.length) return local;
+  if (cloudConfigured && options.cloudRequested) {
+    return parseScannedStatementWithCloud(bytes, app, extension, plan!, options);
+  }
+  // The local reading stands, and the offer travels with it. Nothing has been
+  // uploaded and nothing will be until somebody asks for it in the review.
+  return {
+    ...local,
+    ocr: local.ocr && {
+      ...local.ocr,
+      ...(cloudConfigured
+        ? {
+          cloudOffer: {
+            reason: "LOCAL_INCOMPLETE" as const,
+            detail: `${incomplete.length} ligne(s) de mouvement restent inexploitables après la lecture locale (ligne(s) ${incomplete.join(", ")}).`,
+            consentRequired: !plan?.cloud?.consentGiven,
+          },
+        }
+        : {}),
     },
   };
 }
@@ -839,7 +1125,16 @@ export function repairOcrMoneyColumns(table: ParsedTable): ParsedTable {
   return { headers, rows, warnings };
 }
 
-function formatLabel(format: BankStatementFormat): string {
+/**
+ * What the accountant is told this file is.
+ *
+ * A scanned statement names the engine that actually read it rather than a
+ * fixed one: the same `PDF_OCR` now covers a page read on this machine and a
+ * page read by the provider the user authorised, and which of the two happened
+ * is exactly the thing somebody reviewing the result wants to know.
+ */
+function formatLabel(format: BankStatementFormat, ocr?: ParsedBankStatement["ocr"]): string {
+  const reader = ocr?.local === false ? "Wheat Cloud AI" : "PaddleOCR local";
   return {
     CSV: "CSV / texte délimité",
     TXT: "TXT délimité",
@@ -850,8 +1145,8 @@ function formatLabel(format: BankStatementFormat): string {
     MT940: "SWIFT MT940",
     CAMT053: "ISO 20022 CAMT.053",
     PDF_TEXT: "PDF avec couche texte",
-    PDF_OCR: "PDF scanné — PaddleOCR local",
-    IMAGE_OCR: "Image de relevé — PaddleOCR local",
+    PDF_OCR: `PDF scanné — ${reader}`,
+    IMAGE_OCR: `Image de relevé — ${reader}`,
   }[format];
 }
 
@@ -899,7 +1194,7 @@ function finalize(format: BankStatementFormat, parser: string, table: ParsedTabl
   if (table.rows.length > MAX_ROWS) throw userError(`Le relevé dépasse la limite sûre de ${MAX_ROWS} transactions.`);
   return {
     format,
-    formatLabel: formatLabel(format),
+    formatLabel: formatLabel(format, ocr),
     parser,
     headers: table.headers,
     rows: table.rows,
@@ -914,6 +1209,27 @@ function finalize(format: BankStatementFormat, parser: string, table: ParsedTabl
   };
 }
 
+/**
+ * Movement rows a person cannot use, as the rest of the import sees them.
+ *
+ * The classification has to be the mapping-aware one, because that is what
+ * `canonicalRows`, the review service and the import itself all use. Asked
+ * without a mapping, a statement's registration footer and its totals line look
+ * like movements with no amount — so a page Wheat had read perfectly reported
+ * three "unusable movements" that were never movements at all, which is a model
+ * asked for nothing and, worse, a reading described as incomplete when it was
+ * complete.
+ */
+function unusableMovementRows(table: ParsedTable): number[] {
+  const mapping = suggestStatementMapping(table.headers);
+  return incompleteMovementRows(table, mapping, (row) => classifyStatementRow(row, { mapping }) === "TRANSACTION");
+}
+
+/** Names the engine that actually read the pages, for the import history. */
+function scannedParserName(table: ParsedPdfTable): string {
+  return table.ocr?.local === false ? "WheatCloudBankTableParser" : "PaddleOcrBankTableParser";
+}
+
 export async function parseBankStatement(input: ParseBankStatementInput): Promise<ParsedBankStatement> {
   const sourceName = safeSourceName(input?.sourceName);
   if (typeof input?.bytesBase64 !== "string" || !input.bytesBase64) throw userError("Le relevé est vide.");
@@ -922,15 +1238,22 @@ export async function parseBankStatement(input: ParseBankStatementInput): Promis
   const extension = path.extname(sourceName).toLowerCase();
   const headAscii = bytes.subarray(0, Math.min(bytes.length, 64_000)).toString("latin1");
   const imageExtensions = new Set([".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp", ".heic", ".heif"]);
+  const scanned: ScannedStatementOptions = {
+    aiFallback: input.aiFallback,
+    recognition: input.recognition,
+    cloudRequested: input.cloudRequested,
+    onCloudProgress: input.onCloudProgress,
+    signal: input.signal,
+  };
   if (imageExtensions.has(extension)) {
-    if (!input.app) throw userError("Une image de relevé exige le runtime local PaddleOCR.");
-    const table = await parseScannedPdfWithPaddle(bytes, input.app, extension, input.aiFallback);
-    return finalize("IMAGE_OCR", "PaddleOcrAdaptiveSpatialBankParser", table, [], table.currency ?? null, table.ocr);
+    if (!input.app) throw userError("Une image de relevé doit être lue par reconnaissance, ce qui n'est pas disponible ici.");
+    const table = await parseScannedStatement(bytes, input.app, extension, scanned);
+    return finalize("IMAGE_OCR", scannedParserName(table), table, [], table.currency ?? null, table.ocr);
   }
   if (bytes.subarray(0, 4).equals(Buffer.from([0x25, 0x50, 0x44, 0x46]))) {
-    const table = await parsePdf(bytes, input.app, input.aiFallback);
+    const table = await parsePdf(bytes, input.app, scanned);
     return table.ocr
-      ? finalize("PDF_OCR", "PaddleOcrBankTableParser", table, [], table.currency ?? null, table.ocr)
+      ? finalize("PDF_OCR", scannedParserName(table), table, [], table.currency ?? null, table.ocr)
       : finalize("PDF_TEXT", "PdfTextBankParser", table, [], null);
   }
   if (bytes.subarray(0, 4).equals(Buffer.from([0xD0, 0xCF, 0x11, 0xE0]))) {

@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { disconnectPrisma, ensureDatabaseFile, getPrisma, migrateAndValidateDatabase, resolveDatabasePath, restoreBundledSeed } from "./database";
 import { recordProfileMigration, resolveProfileDirectory } from "./profileMigration";
 import { closeSmartOcrWorker, processSmartOcrFiles, resolveRecognitionPlan, SMART_OCR_PROGRESS_CHANNEL } from "./smartOcr";
-import { CloudOcrUnavailableError } from "./cloudOcr";
+import { CloudOcrFailureError, CloudOcrUnavailableError } from "./cloudOcr";
 import { getPaddleOcrStatus, warmPaddleOcr } from "./paddleOcr";
 import {
   createWheatBackup,
@@ -42,7 +42,7 @@ import {
 import { deriveReconciliationState, registerReconciliationIpc } from "./reconciliation";
 import { createFormDraftService, registerFormDraftIpc } from "./formDrafts";
 import { createWheatDossierSetupService, registerWheatDossierSetupIpc } from "./wheatDossierSetup";
-import { parseBankStatement } from "./bankStatementImporter";
+import { BANK_STATEMENT_PROGRESS_CHANNEL, parseBankStatement } from "./bankStatementImporter";
 import { registerLocalSecurityIpc, type LocalSecurityService } from "./localSecurity";
 import { rollbackDatabaseReplacement, runBestEffortCleanup } from "./databaseRestore";
 import { registerReportingIpc } from "./reporting";
@@ -119,6 +119,15 @@ let mainWindow: BrowserWindow | null = null;
 let trustedRendererLocation: TrustedRendererLocation | null = null;
 let updateService: UpdateService | null = null;
 let wheatAiProviderService: WheatAiProviderService | null = null;
+/**
+ * The bank statement currently being read, so it can be stopped.
+ *
+ * Reading a scanned statement in the cloud is the one import step that can take
+ * a minute and depend on a network, and an accountant who changes their mind
+ * must not have to wait it out. Nothing has been written at this point, so
+ * cancelling costs nothing and leaves no half-imported statement behind.
+ */
+let bankStatementRead: AbortController | null = null;
 let automaticUpdateCheckStarted = false;
 const businessIdleWaiters = new Set<() => void>();
 const operationDrainWaiters = new Set<() => void>();
@@ -2253,17 +2262,72 @@ function registerIpc() {
     };
   });
 
-  ipcMain.handle("wheat:bank:statement:parse", async (_event, payload: Record<string, unknown>) => {
-    return serialize(await parseBankStatement({
-      sourceName: requireText(payload?.sourceName, "Le nom du relevé", 250),
-      bytesBase64: requireText(payload?.bytesBase64, "Le contenu du relevé", 40_000_000),
-      mimeType: typeof payload?.mimeType === "string" ? payload.mimeType : undefined,
-      app,
-      // The same reviewer the document pipeline uses: the same provider, the
-      // same consent, the same anti-invention gate. Absent unless the user has
-      // enabled assisted reading and chosen a model.
-      aiFallback: buildDocumentAiReviewer(),
-    }));
+  /**
+   * Reads a statement file, whatever it is, without writing anything.
+   *
+   * Three answers are possible and only one of them is an error. A file Wheat
+   * could read comes back as the parsed statement. A scanned statement on a
+   * build that reads in the cloud, with no authorisation yet, comes back as a
+   * request for that authorisation — the interface obtains it and calls this
+   * again with the same file, exactly as the document import does. Everything
+   * else throws, and the message says what the accountant can do next.
+   */
+  ipcMain.handle("wheat:bank:statement:parse", async (event, payload: Record<string, unknown>) => {
+    const sender = event.sender;
+    const cloudNotices = new Map<string, string>();
+    // One reading at a time, so "Annuler" can only ever stop the reading the
+    // person is actually looking at. Starting a second one abandons the first,
+    // which is what picking another file already means.
+    bankStatementRead?.abort();
+    const controller = new AbortController();
+    bankStatementRead = controller;
+    try {
+      const parsed = await parseBankStatement({
+        sourceName: requireText(payload?.sourceName, "Le nom du relevé", 250),
+        bytesBase64: requireText(payload?.bytesBase64, "Le contenu du relevé", 40_000_000),
+        mimeType: typeof payload?.mimeType === "string" ? payload.mimeType : undefined,
+        app,
+        // The same reviewer the document pipeline uses: the same provider, the
+        // same consent, the same anti-invention gate. Absent unless the user has
+        // enabled assisted reading and chosen a model.
+        aiFallback: buildDocumentAiReviewer(),
+        // Who reads a scanned statement on this build, with these settings.
+        recognition: recognitionPlan((failure) => cloudNotices.set(failure.message, failure.remedy)),
+        // Set only by the review screen's explicit "read this in the cloud"
+        // action. A build that can read locally never uploads without it.
+        cloudRequested: payload?.cloudRequested === true,
+        onCloudProgress: (progress) => {
+          if (sender && !sender.isDestroyed()) sender.send(BANK_STATEMENT_PROGRESS_CHANNEL, progress);
+        },
+        signal: controller.signal,
+      });
+      return serialize({
+        ...parsed,
+        ...(cloudNotices.size
+          ? { cloudNotices: [...cloudNotices].map(([message, remedy]) => ({ message, remedy })) }
+          : {}),
+      });
+    } catch (error) {
+      // Not a failure to report — a step to complete. The renderer holds the
+      // file it already read, and runs this same parse again afterwards.
+      if (error instanceof CloudOcrUnavailableError) {
+        return serialize({ cloudAuthorization: { required: true, reason: error.reason } });
+      }
+      if (error instanceof CloudOcrFailureError) {
+        return serialize({ cloudFailure: { message: error.message, remedy: error.remedy } });
+      }
+      throw error;
+    } finally {
+      if (bankStatementRead === controller) bankStatementRead = null;
+    }
+  });
+
+  /** Stops a reading in flight. Nothing was written, so nothing is undone. */
+  ipcMain.handle("wheat:bank:statement:cancel-read", async () => {
+    const running = Boolean(bankStatementRead);
+    bankStatementRead?.abort();
+    bankStatementRead = null;
+    return serialize({ cancelled: running });
   });
 
   ipcMain.handle("wheat:bank:statement:prepare", async (_event, payload: Record<string, unknown>) => {

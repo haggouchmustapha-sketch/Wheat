@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import type { App } from "electron";
+import { resolvePdfWorkerUrl } from "./pageImages";
 
 /**
  * The source document, shown beside the values Wheat read off it.
@@ -78,17 +78,6 @@ export function forgetDocumentPagePreviews(storedPath?: string) {
 
 function unavailable(reason: string): DocumentPagePreview {
   return { page: 1, pageCount: 0, mimeType: "", base64: "", rendered: false, reason };
-}
-
-function resolvePdfWorkerUrl(app?: App): string {
-  const candidates = app?.isPackaged
-    ? [
-      path.join(process.resourcesPath, "ocr", "pdf.worker.mjs"),
-      path.join(process.resourcesPath, "app.asar.unpacked", "node_modules", "pdf-parse", "dist", "worker", "pdf.worker.mjs"),
-    ]
-    : [path.join(process.cwd(), "node_modules", "pdf-parse", "dist", "worker", "pdf.worker.mjs")];
-  const found = candidates.find((candidate) => fs.existsSync(candidate));
-  return found ? pathToFileURL(found).toString() : "";
 }
 
 /**

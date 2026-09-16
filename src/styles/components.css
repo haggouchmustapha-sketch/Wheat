@@ -445,6 +445,23 @@
 
 .wt-textarea { padding: var(--space-4) var(--space-5); min-height: 92px; line-height: var(--leading-normal); resize: vertical; }
 
+/*
+ * An input that has to read as a table cell.
+ *
+ * A scanned statement's preview is a grid of values a person corrects in place;
+ * full-height bordered inputs would turn it into a form of forty fields. The
+ * border appears on hover and focus, so the cell still says it is editable.
+ */
+.wt-input--cell {
+  min-height: auto;
+  padding: var(--space-2) var(--space-3);
+  border-color: transparent;
+  background: transparent;
+  font-size: var(--text-sm);
+}
+
+.wt-input--cell:hover:not(:disabled) { border-color: var(--line); background: var(--surface); }
+
 .wt-input::placeholder,
 .wt-textarea::placeholder { color: var(--text-faint); }
 
@@ -1251,6 +1268,26 @@
   box-shadow: var(--shadow-lg);
   color: var(--text);
   font-size: var(--text-sm);
+}
+
+/* The banner itself ignores the pointer; a cancel control inside it must not. */
+.wt-running-task__cancel {
+  flex: none;
+  pointer-events: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-4);
+  background: var(--surface-2, transparent);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.wt-running-task__cancel:hover,
+.wt-running-task__cancel:focus-visible {
+  border-color: var(--brand);
+  color: var(--brand);
 }
 
 .wt-running-task__spin {

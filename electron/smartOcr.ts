@@ -3,7 +3,6 @@ import { STORED_SCHEMA_VERSIONS, WHEAT_OCR_TAG } from "./legacyDomainValues";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import type { App } from "electron";
 import { portableArchiveSegment } from "./archive";
 import { closePaddleOcrWorker, paddleOcrPoolSize, recognizeWithPaddle } from "./paddleOcr";
@@ -16,17 +15,18 @@ import { evaluateTotals } from "./ocrAmounts";
 import { extractDocumentFields, type DetectedParty, type ExtractionContext, type ExtractionResult } from "./ocrFieldExtraction";
 import { reviewDocumentWithAi, type AiReviewChat, type AiReviewOutcome } from "./ocrAiReview";
 import { readWheatEnv } from "./runtimeEnvironment";
+import { buildCloudImage, buildPaddlePrimaryImage, getSharp, resolvePdfWorkerUrl } from "./pageImages";
 import { WHEAT_EDITION_PROFILE } from "../src/wheatEdition";
 import {
   CloudOcrUnavailableError,
-  ocrEngineOrder,
   recognizeWithCloud,
   requiresCloudRecognition,
+  resolveRecognitionPlan,
   CloudOcrFailureError,
-  type CloudOcrRemedy,
-  type CloudOcrRuntime,
-  type OcrEngine,
+  type RecognitionPlan,
 } from "./cloudOcr";
+
+export { resolveRecognitionPlan, type RecognitionPlan } from "./cloudOcr";
 
 type ExistingDocument = {
   id: string;
@@ -117,41 +117,6 @@ export type SmartOcrProgress = {
 
 export type SmartOcrProgressListener = (event: SmartOcrProgress) => void;
 
-/**
- * Who reads a page, for this build and these settings.
- *
- * Threaded through recognition rather than read from a module-level constant so
- * that the decision is made once, by the caller, and every page of every
- * document in one import is read by the same engines in the same order. It is
- * also what makes the whole path testable without an edition-specific build.
- */
-export type RecognitionPlan = {
-  /** Engines to try, in order. Always ends at the local Tesseract fallback. */
-  order: OcrEngine[];
-  cloud: { runtime: CloudOcrRuntime; consentGiven: boolean } | null;
-  /**
-   * Called when a cloud reading was attempted and did not work.
-   *
-   * The document is still read — the local fallback takes over — so this is not
-   * an error the import has to stop for. It is the difference between "Wheat
-   * read your invoice, less well than it could have, and never said why" and a
-   * sentence telling the accountant that their provider allowance is used up.
-   */
-  onCloudFailure?: (failure: { message: string; remedy: CloudOcrRemedy }) => void;
-};
-
-export function resolveRecognitionPlan(input: {
-  cloud?: { runtime: CloudOcrRuntime; enabled: boolean; consentGiven: boolean } | null;
-  hasBundledLocalOcr?: boolean;
-}): RecognitionPlan {
-  const cloud = input.cloud ?? null;
-  const order = ocrEngineOrder({
-    hasBundledLocalOcr: input.hasBundledLocalOcr,
-    cloudOcrEnabled: Boolean(cloud?.enabled),
-  });
-  return { order, cloud: cloud?.enabled ? { runtime: cloud.runtime, consentGiven: cloud.consentGiven } : null };
-}
-
 /** The one-way channel batch progress is pushed to the renderer on. */
 export const SMART_OCR_PROGRESS_CHANNEL = "wheat:smart-ocr:progress";
 
@@ -172,7 +137,6 @@ type SmartOcrResult = {
 
 const nodeRequire = createRequire(import.meta.url);
 let worker: any = null;
-let sharpModule: any = null;
 
 const engineName = "Wheat Vision OCR";
 const engineVersion = "2.1.0";
@@ -1067,56 +1031,6 @@ async function recognizeImageWithPreprocessing(app: App, input: string | Buffer,
   };
 }
 
-async function buildPaddlePrimaryImage(input: string | Buffer): Promise<{ buffer: Buffer; steps: string[]; width: number; height: number }> {
-  const sharp = await getSharp();
-  const source = sharp(input, { limitInputPixels: false }).rotate();
-  const metadata = await source.metadata();
-  const width = metadata.width ?? 0;
-  const resizeWidth = width > 1800 ? 1800 : width > 0 && width < 1200 ? 1600 : undefined;
-  const { data, info } = await sharp(input, { limitInputPixels: false })
-    .rotate()
-    .resize(resizeWidth ? { width: resizeWidth, withoutEnlargement: false } : undefined)
-    .png({ compressionLevel: 3 })
-    .toBuffer({ resolveWithObject: true });
-  return {
-    buffer: data,
-    // The recogniser reports coordinates in the space of the image it was
-    // given, so the size recorded here is the resized one, not the original.
-    width: info.width,
-    height: info.height,
-    steps: ["sharp-auto-rotate", resizeWidth ? `paddle-resize-width-${resizeWidth}` : "paddle-native-size", "paddle-png"],
-  };
-}
-
-/**
- * The page as it is sent to a cloud recogniser.
- *
- * The same rotation and the same 1800-pixel ceiling as the local path, so the
- * two engines read the same page — but encoded as JPEG rather than PNG. The
- * person waiting on this is, by construction, on the machine and often the
- * connection least able to afford the upload: the same page is roughly an order
- * of magnitude smaller this way, and a document scan has no flat colour for
- * lossless encoding to exploit. Quality 82 is above the point where a printed
- * amount starts to degrade.
- */
-async function buildCloudImage(input: string | Buffer): Promise<{ buffer: Buffer; steps: string[]; width: number; height: number }> {
-  const sharp = await getSharp();
-  const metadata = await sharp(input, { limitInputPixels: false }).rotate().metadata();
-  const width = metadata.width ?? 0;
-  const resizeWidth = width > 1800 ? 1800 : width > 0 && width < 1200 ? 1600 : undefined;
-  const { data, info } = await sharp(input, { limitInputPixels: false })
-    .rotate()
-    .resize(resizeWidth ? { width: resizeWidth, withoutEnlargement: false } : undefined)
-    .jpeg({ quality: 82, mozjpeg: true })
-    .toBuffer({ resolveWithObject: true });
-  return {
-    buffer: data,
-    width: info.width,
-    height: info.height,
-    steps: ["sharp-auto-rotate", resizeWidth ? `cloud-resize-width-${resizeWidth}` : "cloud-native-size", "cloud-jpeg-q82"],
-  };
-}
-
 async function buildImageVariants(input: string | Buffer): Promise<Array<{ name: string; buffer: Buffer; steps: string[] }>> {
   const sharp = await getSharp();
   const base = sharp(input, { limitInputPixels: false }).rotate();
@@ -1190,14 +1104,6 @@ async function getWorker(app: App) {
   }
 
   return worker;
-}
-
-async function getSharp() {
-  if (!sharpModule) {
-    const module = await import("sharp");
-    sharpModule = module.default ?? module;
-  }
-  return sharpModule;
 }
 
 /**
@@ -1939,21 +1845,6 @@ function resolveTesseractNodeWorkerPath(app: App) {
   const relativeWorkerPath = path.join("node_modules", "tesseract.js", "src", "worker-script", "node", "index.js");
   if (app.isPackaged) return path.join(process.resourcesPath, "app.asar.unpacked", relativeWorkerPath);
   return path.join(process.cwd(), relativeWorkerPath);
-}
-
-function resolvePdfWorkerUrl(app: App) {
-  const candidates = app.isPackaged
-    ? [
-      path.join(process.resourcesPath, "ocr", "pdf.worker.mjs"),
-      path.join(process.resourcesPath, "app.asar.unpacked", "node_modules", "pdf-parse", "dist", "worker", "pdf.worker.mjs"),
-      path.join(path.dirname(process.execPath), "resources", "ocr", "pdf.worker.mjs"),
-    ]
-    : [
-      path.join(process.cwd(), "node_modules", "pdf-parse", "dist", "worker", "pdf.worker.mjs"),
-      path.join(process.cwd(), "node_modules", "pdf-parse", "dist", "pdf-parse", "esm", "pdf.worker.mjs"),
-    ];
-  const found = candidates.find((candidate) => fs.existsSync(candidate));
-  return found ? pathToFileURL(found).toString() : "";
 }
 
 function errorMessage(error: unknown) {

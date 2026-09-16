@@ -18,6 +18,7 @@ import {
   Calendar,
   ChevronLeft,
   CheckCircle2,
+  Cloud,
   LoaderCircle,
   ChevronRight,
   Command,
@@ -252,13 +253,46 @@ type BankImportDraft = {
       engineVersion: string;
       confidence: number;
       pageCount: number;
-      local: true;
+      /** False when the pages were read by the provider the user authorised. */
+      local: boolean;
       assistedRows?: number[];
       fallbackRecommended?: boolean;
-      confidenceDimensions?: { layout?: number; rowReconstruction?: number; fieldMapping?: number };
+      confidenceDimensions?: { layout?: number | null; rowReconstruction?: number | null; fieldMapping?: number | null };
+      /**
+       * Present when the pages themselves were read in the cloud.
+       *
+       * `blockingIssues` is what an accountant must settle before Wheat will
+       * accept the statement: an ambiguous debit/credit, an unreadable date, a
+       * line whose nature the reading could not establish. They are stated
+       * rather than resolved, because resolving them is guessing.
+       */
+      cloud?: {
+        provider: string;
+        modelId: string;
+        pagesRead: number;
+        blockingIssues: string[];
+        readBalances: Array<{ kind: "OPENING_BALANCE" | "CLOSING_BALANCE"; page: number; label: string; amount: string }>;
+        evidence: Array<{
+          row: number;
+          page: number;
+          lineOnPage: number | null;
+          kind: string;
+          original: Record<string, string>;
+          corrections: string[];
+          uncertainFields: string[];
+        }>;
+      };
+      /** A cloud reading the accountant may ask for. Never acted on by itself. */
+      cloudOffer?: { reason: "LOCAL_FAILED" | "LOCAL_INCOMPLETE"; detail: string; consentRequired: boolean };
     };
   };
   complète: () => void;
+  /**
+   * Reads this same statement in the cloud, on the accountant's explicit
+   * request. Present on every draft; the review screen only offers it when the
+   * reading it is looking at came up short and a provider is configured.
+   */
+  readInCloud?: () => void;
 };
 type LocalSecurityStatus = {
   enabled: boolean;
@@ -936,6 +970,16 @@ function App() {
   const [companyModalOpen, setCompanyModalOpen] = useState(false);
   const [employeeEditor, setEmployeeEditor] = useState<{ employee?: any } | null>(null);
   const [bankImportDraft, setBankImportDraft] = useState<BankImportDraft | null>(null);
+  /**
+   * The authorisation a scanned statement is waiting on, and the way back.
+   *
+   * Separate from the documents workspace's own gate: both ask the same
+   * question, but they resume different work, and a statement resumes into its
+   * bank account rather than into a list of file paths.
+   */
+  const [bankCloudGate, setBankCloudGate] = useState<CloudGate | null>(null);
+  /** Page-by-page progress of a cloud reading, while one is running. */
+  const [bankReadProgress, setBankReadProgress] = useState<{ completed: number; total: number } | null>(null);
   /** Set when a recognised document could not be attributed to this dossier. */
   const [directionChoice, setDirectionChoice] = useState<{ documentId: string; message: string } | null>(null);
   const [darkMode, setDarkMode] = useState(false);
@@ -1657,32 +1701,104 @@ function App() {
     }
   };
 
-  const importBankStatement = async (bankAccountId: string) => {
+  /**
+   * Reads one statement file and opens the review on it.
+   *
+   * Reading is the slowest thing Wheat does on demand — a scanned statement is
+   * rendered page by page and recognised — so the shell says what is happening
+   * and, when the reading is a cloud one, how far along it is. Nothing is
+   * written by any of this: the review that follows is where the accountant
+   * decides.
+   *
+   * Two answers are not failures. A build that reads scans in the cloud with no
+   * authorisation yet asks for one and reads *this same file* immediately
+   * afterwards — the person never picks it twice. A cloud reading that started
+   * and did not finish is reported in the language of what to do next.
+   */
+  /**
+   * Page-by-page progress of a cloud reading.
+   *
+   * A scanned statement read over a connection is the one import step where the
+   * window would otherwise sit still for a minute with nothing to say. The
+   * pages are the honest unit: the reader knows how many there are before it
+   * starts, so this is a real fraction rather than an invented percentage.
+   */
+  useEffect(() => {
+    if (!window.wheat?.onBankStatementProgress) return;
+    return window.wheat.onBankStatementProgress((event: any) => {
+      const total = Number(event?.total ?? 0);
+      const completed = Number(event?.completed ?? 0);
+      if (!total) return setBankReadProgress(null);
+      setBankReadProgress({ completed, total });
+    });
+  }, []);
+
+  /**
+   * Reads a statement again, from a dialog rather than from a caller.
+   *
+   * Resuming after an authorisation, and asking for a cloud reading, both start
+   * work that nobody is awaiting — so a failure here has to be caught and said
+   * out loud, or it would be an unhandled rejection and a dialog that closed
+   * with no explanation.
+   */
+  const rereadStatement = (bankAccountId: string, options: { file: BankImportDraft["file"]; cloudRequested?: boolean }) => {
+    void importBankStatement(bankAccountId, options).catch((error) => {
+      notify(error instanceof Error ? error.message : "La lecture du relevé n'a pas abouti.", "warning");
+    });
+  };
+
+  const importBankStatement = async (bankAccountId: string, options?: { file?: BankImportDraft["file"]; cloudRequested?: boolean }) => {
     if (!window.wheat?.selectBankStatementFile || !window.wheat.parseBankStatement || !window.wheat.reviewBankStatement || !window.wheat.importBankStatement) {
       throw new Error("Import de relevé disponible uniquement dans l’application desktop.");
     }
 
-    const file = await window.wheat.selectBankStatementFile();
+    const file = options?.file ?? await window.wheat.selectBankStatementFile();
     if (!file) return;
-    /*
-     * Reading a statement is the slowest thing Wheat does on demand: a scanned
-     * PDF goes through the local OCR sidecar and can take a minute. Only the
-     * phases actually known here are named — the page-by-page progress of the
-     * recogniser is not reported over this channel, and a percentage nobody
-     * measured is worse than no percentage.
-     */
     setRunningTask("Analyse du relevé bancaire…");
+    setBankReadProgress(null);
     let parsed;
     try {
-      parsed = await window.wheat.parseBankStatement({ sourceName: file.name, bytesBase64: file.bytesBase64 });
+      parsed = await window.wheat.parseBankStatement({
+        sourceName: file.name,
+        bytesBase64: file.bytesBase64,
+        cloudRequested: options?.cloudRequested === true,
+      });
     } finally {
       // Cleared before the dialog opens, and on failure — the caller reports
       // the error, and a refused statement must not leave the shell busy.
       setRunningTask("");
+      setBankReadProgress(null);
     }
+
+    if (parsed?.cloudAuthorization?.required) {
+      // Nothing was read and nothing was written. The file is held, the person
+      // is asked the one question that is missing, and this same statement is
+      // read again from the dialog.
+      setBankCloudGate({
+        reason: parsed.cloudAuthorization.reason === "CONSENT_REQUIRED" ? "CONSENT_REQUIRED" : "NOT_CONNECTED",
+        filePaths: [file.name],
+        subject: "BANK_STATEMENT",
+        resume: () => rereadStatement(bankAccountId, { file, cloudRequested: options?.cloudRequested }),
+      });
+      return;
+    }
+    if (parsed?.cloudFailure) {
+      throw new Error(parsed.cloudFailure.message);
+    }
+    for (const notice of parsed?.cloudNotices ?? []) notify(notice.message, "warning");
+
     const sourceSha256 = await sha256Base64(file.bytesBase64);
     await new Promise<void>((complète) => {
-      setBankImportDraft({ bankAccountId, file, sourceSha256, parsed, complète });
+      setBankImportDraft({
+        bankAccountId,
+        file,
+        sourceSha256,
+        parsed,
+        complète,
+        // Offered by the review screen when the local reading came up short.
+        // Calling it is the accountant's explicit request to upload the pages.
+        readInCloud: () => rereadStatement(bankAccountId, { file, cloudRequested: true }),
+      });
     });
   };
 
@@ -2419,6 +2535,15 @@ function App() {
         language={language}
       />
 
+      {bankCloudGate && (
+        <WheatCloudGateDialog
+          gate={bankCloudGate}
+          notify={notify}
+          onCancel={() => setBankCloudGate(null)}
+          onResume={() => setBankCloudGate(null)}
+        />
+      )}
+
       {identityEditorOpen && currentCompany && (
         <CompanyIdentityDialog
           company={currentCompany}
@@ -2512,7 +2637,13 @@ function App() {
       {reviewSurface}
       <AppContextMenu menu={appContextMenu} onRun={runContextAction} />
       <WheatUpdateNotices status={updateStatus} actions={updateActions} busy={updateBusy} />
-      <RunningTaskBanner label={runningTask} />
+      <RunningTaskBanner
+        label={runningTask}
+        progress={bankReadProgress}
+        onCancel={bankReadProgress && window.wheat?.cancelBankStatementRead
+          ? () => void window.wheat?.cancelBankStatementRead?.()
+          : undefined}
+      />
       <ToastStack toasts={toasts} />
     </div>
   );
@@ -5785,6 +5916,30 @@ function BankStatementImportModal({ companyId, draft, onClose, onImported, onRec
   const [error, setError] = useState("");
   const [busy, setBusy] = useState<"review" | "import" | "">("");
   const [allowDuplicates, setAllowDuplicates] = useState(false);
+  /*
+   * Corrections to what the recogniser read, cell by cell.
+   *
+   * A scanned statement arrives as a set of *proposals*: every cell was read off
+   * a photograph by a machine, and the accountant is the only one who can say
+   * whether the machine got it right. Until now the preview was read-only, so
+   * the only way to fix a misread digit was to abandon the import and retype the
+   * statement somewhere else — which is how a wrong figure ends up accepted
+   * instead of corrected.
+   *
+   * Held sparsely, by row index and column, so the draft that survives closing
+   * the dialog carries the handful of corrections somebody made rather than a
+   * copy of the whole statement.
+   */
+  const [cellEdits, setCellEdits] = useState<Record<number, Record<string, string>>>({});
+  /**
+   * Whether the accountant has confirmed the lines Wheat could not settle.
+   *
+   * Only ever required when the reading reported something no rule can decide
+   * — a line whose nature it could not establish, a page it could not finish.
+   * Wheat does not resolve these on anybody's behalf: it names them, refuses to
+   * confirm, and waits.
+   */
+  const [cloudIssuesAcknowledged, setCloudIssuesAcknowledged] = useState(false);
   const [mappingRestored, setMappingRestored] = useState(false);
   const [report, setReport] = useState<any>(null);
   /*
@@ -5803,6 +5958,22 @@ function BankStatementImportModal({ companyId, draft, onClose, onImported, onRec
   const declared = draft.parsed.declaredBalances ?? {};
   const fileDeclaresBalances = declared.openingBalanceCents !== undefined && declared.closingBalanceCents !== undefined;
   const [statedBalances, setStatedBalances] = useState({ opening: "", closing: "" });
+
+  /**
+   * A balance read off a scanned page, in the form the amount fields accept.
+   *
+   * Strips only what a bank prints for the eye — thin spaces between thousands,
+   * a currency word — and turns a decimal comma into a point. Nothing is
+   * rounded, nothing is completed, and a value it cannot render cleanly is
+   * offered exactly as it was read so the person sees what Wheat saw.
+   */
+  const normalizeReadBalance = (value: string): string => {
+    const text = String(value ?? "").replace(/\s/g, "").replace(/(?:MAD|DH|DHS|EUR|USD)/gi, "").trim();
+    if (!text) return "";
+    const negative = /^[-(]/.test(text) || /\)$/.test(text);
+    const digits = text.replace(/^[-(]/, "").replace(/\)$/, "").replace(/\.(?=\d{3}(?!\d))/g, "").replace(",", ".");
+    return /^\d+(?:\.\d{1,2})?$/.test(digits) ? `${negative ? "-" : ""}${digits}` : value.trim();
+  };
 
   /**
    * Reads a balance as the accountant writes it, sign included: a bank account
@@ -5833,14 +6004,16 @@ function BankStatementImportModal({ companyId, draft, onClose, onImported, onRec
     && Object.keys(statedBalancesPayload()).length === 0;
 
   /*
-   * The column mapping somebody worked out, kept until the statement is
-   * actually imported.
+   * The work somebody put into this statement, kept until it is actually
+   * imported: the column mapping, and the corrections typed over what the
+   * recogniser read.
    *
    * Mapping an unfamiliar statement is the slowest part of an import: it means
    * reading the file's own headings and deciding which is the value date and
-   * whether the amounts are signed or split. Closing the dialog to go and look
-   * — or Wheat restarting — threw all of that away and re-proposed the
-   * suggestion the person had just corrected.
+   * whether the amounts are signed or split. Correcting a scan is slower still.
+   * Closing the dialog to go and look at the paper statement — or Wheat
+   * restarting — threw all of that away and re-proposed the suggestion the
+   * person had just corrected.
    *
    * Keyed by the file's content hash within its bank account, so the same
    * statement offered again is recognised, and a mapping worked out for one
@@ -5852,13 +6025,14 @@ function BankStatementImportModal({ companyId, draft, onClose, onImported, onRec
    * review it was given against; restoring it later would pre-arm a duplicate
    * import nobody re-authorised.
    */
-  const mappingDraft = useDraftedForm<{ mapping: Record<string, string> }>({
+  const mappingDraft = useDraftedForm<{ mapping: Record<string, string>; cellEdits?: Record<number, Record<string, string>> }>({
     companyId,
     entity: "bank.statement.import",
     draftKey: `${draft.bankAccountId}:${draft.sourceSha256}`,
     open: true,
-    value: { mapping },
+    value: { mapping, cellEdits },
     onRestore: (payload) => {
+      if (payload?.cellEdits && typeof payload.cellEdits === "object") setCellEdits(payload.cellEdits);
       if (!payload?.mapping || typeof payload.mapping !== "object") return;
       setMapping(Object.fromEntries(
         Object.entries(payload.mapping).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
@@ -5869,6 +6043,35 @@ function BankStatementImportModal({ companyId, draft, onClose, onImported, onRec
       setMappingRestored(true);
     },
   });
+
+  /**
+   * The statement as it currently stands: what was read, plus what was fixed.
+   *
+   * Everything downstream of here — the checks, the preview, the import — reads
+   * these rows and not the raw parse, so a correction an accountant makes is
+   * validated and imported rather than merely displayed.
+   */
+  const rows = useMemo(
+    () => draft.parsed.rows.map((row, index) => (cellEdits[index] ? { ...row, ...cellEdits[index] } : row)),
+    [draft.parsed.rows, cellEdits],
+  );
+
+  /** A cell corrected on the page. Reverting it to what was read drops the edit. */
+  const updateCell = (rowIndex: number, header: string, value: string) => {
+    setCellEdits((current) => {
+      const next = { ...current };
+      const rowEdits = { ...(next[rowIndex] ?? {}) };
+      if (value === (draft.parsed.rows[rowIndex]?.[header] ?? "")) delete rowEdits[header];
+      else rowEdits[header] = value;
+      if (Object.keys(rowEdits).length) next[rowIndex] = rowEdits;
+      else delete next[rowIndex];
+      return next;
+    });
+    // The service checked the previous values, so its verdict no longer applies.
+    setReview(null);
+    setAllowDuplicates(false);
+    setError("");
+  };
 
   const updateMapping = (field: string, value: string) => {
     setMapping((current) => {
@@ -5894,7 +6097,7 @@ function BankStatementImportModal({ companyId, draft, onClose, onImported, onRec
       const result = await window.wheat.reviewBankStatement({
         bankAccountId: draft.bankAccountId,
         sourceSha256: draft.sourceSha256,
-        rows: draft.parsed.rows,
+        rows,
         mapping,
         sourceCurrency: draft.parsed.currency,
       });
@@ -5920,7 +6123,7 @@ function BankStatementImportModal({ companyId, draft, onClose, onImported, onRec
         sourceBytesBase64: draft.file.bytesBase64,
         sourceFormat: draft.parsed.format,
         sourceCurrency: draft.parsed.currency,
-        rows: draft.parsed.rows,
+        rows,
         mapping,
         // The balances the statement declares about itself, when it declares
         // them. The import service compares them against the movements it read
@@ -5961,12 +6164,27 @@ function BankStatementImportModal({ companyId, draft, onClose, onImported, onRec
   ] as const;
   const previewHeaders = draft.parsed.headers.slice(0, 12);
   const assistedRows = new Set(draft.parsed.ocr?.assistedRows ?? []);
+  /**
+   * Whether this statement was read off an image rather than parsed from a
+   * machine-readable file. Every cell of such a statement is a proposal, so all
+   * of them are shown and all of them are editable — not just the first twenty,
+   * because the twenty-first can be wrong too.
+   */
+  const recognised = Boolean(draft.parsed.ocr);
+  const visibleRows = recognised ? rows : rows.slice(0, 20);
+  const sourcePages = rows.some((row) => row.__wheatSourcePage);
+  const cloudReading = draft.parsed.ocr?.cloud;
+  const cloudIssues = cloudReading?.blockingIssues ?? [];
 
   const headerOptions: WheatSelectOption[] = [
     { value: "", label: "Non mappé", note: "Cette information ne figure pas dans le fichier" },
     ...draft.parsed.headers.map((header) => ({ value: header, label: header, note: "Colonne du fichier" })),
   ];
-  const canConfirm = Boolean(review?.canImport) && !(review && review.duplicateCount > 0 && !allowDuplicates);
+  const canConfirm = Boolean(review?.canImport)
+    && !(review && review.duplicateCount > 0 && !allowDuplicates)
+    // A reading that could not settle a line is not a statement Wheat will
+    // accept on its own word, however well the rest of it validates.
+    && (!cloudIssues.length || cloudIssuesAcknowledged);
 
   return (
     <Dialog
@@ -6050,9 +6268,19 @@ function BankStatementImportModal({ companyId, draft, onClose, onImported, onRec
                 title="Relevé lu par reconnaissance de texte"
               >
                 <p>
-                  {draft.parsed.ocr.engine} {draft.parsed.ocr.engineVersion} · confiance {draft.parsed.ocr.confidence}% · {draft.parsed.ocr.pageCount} page(s) · traitement local.
+                  {draft.parsed.ocr.engine} {draft.parsed.ocr.engineVersion} · confiance {draft.parsed.ocr.confidence}% · {draft.parsed.ocr.pageCount} page(s) ·{" "}
+                  {draft.parsed.ocr.local === false
+                    ? `lecture en ligne par ${cloudReading?.provider ?? "Wheat Cloud AI"} que vous avez autorisé`
+                    : "traitement local"}.
                   Vérifiez attentivement les montants : une lecture automatique n'est jamais sûre à 100 %.
                 </p>
+                {draft.parsed.ocr.local === false && (
+                  <p data-testid="bank-import-cloud-reading">
+                    Les pages de ce relevé ont été envoyées à votre fournisseur d'IA pour être transcrites
+                    ({cloudReading?.pagesRead ?? 0} page(s) lue(s)). Aucun mouvement n'a été créé, aucun rapprochement
+                    n'a été fait : chaque ligne ci-dessous est une proposition que vous pouvez corriger avant de confirmer.
+                  </p>
+                )}
                 {/*
                   * What the reading was actually good at. One average hides the
                   * case that matters — a page read cleanly whose columns were
@@ -6089,6 +6317,78 @@ function BankStatementImportModal({ companyId, draft, onClose, onImported, onRec
                   Rien n'a été remplacé : ce que Wheat avait lu est resté tel quel, et aucune valeur introuvable dans la page n'a été retenue.
                   Ces lignes restent des propositions — vérifiez-les avant de confirmer.
                 </p>
+              </Callout>
+            )}
+
+            {cloudIssues.length > 0 && (
+              <Callout
+                tone="danger"
+                icon={<AlertTriangle size={17} />}
+                title="Des lignes n'ont pas pu être établies de façon sûre"
+              >
+                <p>
+                  Wheat ne tranche pas à votre place. Corrigez les lignes concernées dans le tableau ci-dessous,
+                  ou retirez-les, puis relancez les contrôles.
+                </p>
+                <ul data-testid="bank-import-cloud-issues">{cloudIssues.map((issue) => <li key={issue}>{issue}</li>)}</ul>
+                <label className="wt-checkbox">
+                  <input
+                    type="checkbox"
+                    data-testid="bank-import-cloud-ack"
+                    checked={cloudIssuesAcknowledged}
+                    onChange={(event) => setCloudIssuesAcknowledged(event.target.checked)}
+                  />
+                  <span className="wt-checkbox__text">
+                    <span>J'ai contrôlé ces lignes sur le relevé papier.</span>
+                    <small>Sans cette confirmation, l'import reste bloqué : un relevé dont une ligne est douteuse n'est pas un relevé complet.</small>
+                  </span>
+                </label>
+              </Callout>
+            )}
+
+            {(cloudReading?.readBalances.length ?? 0) > 0 && !fileDeclaresBalances && (
+              <Callout tone="info" icon={<Scale size={17} />} title="Soldes lus sur les pages">
+                <p>
+                  Ces montants ont été lus sur le relevé, pas déclarés par un format machine. Wheat ne s'en sert pas
+                  tant que vous ne les avez pas repris vous-même : comparez-les au papier avant de les utiliser.
+                </p>
+                <ul data-testid="bank-import-read-balances">
+                  {cloudReading!.readBalances.map((balance, index) => (
+                    <li key={`${balance.kind}-${index}`}>
+                      {balance.kind === "OPENING_BALANCE" ? "Solde initial" : "Solde final"} · page {balance.page} : {balance.amount || "montant illisible"}
+                    </li>
+                  ))}
+                </ul>
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    const opening = cloudReading!.readBalances.find((balance) => balance.kind === "OPENING_BALANCE")?.amount ?? "";
+                    const closing = cloudReading!.readBalances.find((balance) => balance.kind === "CLOSING_BALANCE")?.amount ?? "";
+                    setStatedBalances({ opening: normalizeReadBalance(opening), closing: normalizeReadBalance(closing) });
+                  }}
+                >
+                  Reprendre ces soldes
+                </Button>
+              </Callout>
+            )}
+
+            {draft.parsed.ocr?.cloudOffer && draft.readInCloud && (
+              <Callout tone="warning" icon={<Cloud size={17} />} title="La lecture locale n'a pas tout établi">
+                <p data-testid="bank-import-cloud-offer">{draft.parsed.ocr.cloudOffer.detail}</p>
+                <p>
+                  Vous pouvez compléter ces lignes à la main dans le tableau ci-dessous, ou demander à Wheat Cloud AI
+                  de relire les pages de ce relevé. Dans ce cas, les images des pages sont envoyées à votre fournisseur
+                  d'IA {draft.parsed.ocr.cloudOffer.consentRequired ? "après votre autorisation" : ""} — rien n'est envoyé
+                  tant que vous ne le demandez pas ici.
+                </p>
+                <Button
+                  variant="secondary"
+                  icon={<Cloud size={15} />}
+                  data-testid="bank-import-cloud-request"
+                  onClick={() => { draft.readInCloud?.(); onClose(); }}
+                >
+                  Relire ce relevé avec Wheat Cloud AI
+                </Button>
               </Callout>
             )}
 
@@ -6177,8 +6477,10 @@ function BankStatementImportModal({ companyId, draft, onClose, onImported, onRec
             </Card>
 
             <Card
-              title="Aperçu du fichier source"
-              note="Les 20 premières lignes, telles qu'elles ont été lues."
+              title={recognised ? "Lignes lues sur le relevé" : "Aperçu du fichier source"}
+              note={recognised
+                ? "Chaque cellule a été lue sur l'image de la page : corrigez ce qui ne correspond pas au relevé papier, puis relancez les contrôles."
+                : "Les 20 premières lignes, telles qu'elles ont été lues."}
               icon={<Eye size={18} aria-hidden="true" />}
               flush
             >
@@ -6187,26 +6489,48 @@ function BankStatementImportModal({ companyId, draft, onClose, onImported, onRec
                   <thead>
                     <tr>
                       <th scope="col">Ligne</th>
+                      {recognised && sourcePages && <th scope="col">Page</th>}
                       {previewHeaders.map((header) => <th key={header} scope="col">{header}</th>)}
                     </tr>
                   </thead>
                   <tbody>
-                    {draft.parsed.previewRows.map((row, index) => {
+                    {visibleRows.map((row, index) => {
                       // 1-based, matching the row numbers the pipeline reports.
-                      const assisted = assistedRows.has(index + 1);
+                      const number = index + 1;
+                      const assisted = assistedRows.has(number);
+                      const edited = Boolean(cellEdits[index] && Object.keys(cellEdits[index]).length);
                       return (
                         <tr key={index} className={assisted ? "wt-row--assisted" : undefined}>
                           <td className="wt-num">
-                            {index + 1}
+                            {number}
                             {assisted && <span className="wt-assisted-mark" title="Ligne complétée par la relecture assistée : à vérifier">·IA</span>}
+                            {edited && <span className="wt-assisted-mark" title="Ligne corrigée par vous">·corrigée</span>}
                           </td>
-                          {previewHeaders.map((header) => <td key={header}>{row[header] || "—"}</td>)}
+                          {recognised && sourcePages && <td className="wt-num">{row.__wheatSourcePage || "—"}</td>}
+                          {previewHeaders.map((header) => (
+                            <td key={header}>
+                              {recognised ? (
+                                <input
+                                  className="wt-input wt-input--cell"
+                                  value={row[header] ?? ""}
+                                  aria-label={`Ligne ${number}, ${header}`}
+                                  onChange={(event) => updateCell(index, header, event.target.value)}
+                                />
+                              ) : (row[header] || "—")}
+                            </td>
+                          ))}
                         </tr>
                       );
                     })}
                   </tbody>
                 </table>
               </TableWrap>
+              {recognised && (
+                <p className="wt-hint">
+                  {rows.length} ligne(s) lue(s){draft.parsed.ocr?.local === false ? ", toutes issues de la lecture en ligne" : ""}.
+                  Rien n'est enregistré tant que vous n'avez pas confirmé.
+                </p>
+              )}
             </Card>
 
             {review && (
@@ -6233,7 +6557,7 @@ function BankStatementImportModal({ companyId, draft, onClose, onImported, onRec
                   <Callout tone="danger" title="Erreurs bloquantes">
                     {/* The refusal keeps its one line; the row it refused, the
                         rule and the remedy sit behind the information control. */}
-                    <IssueList issues={bankImportIssues(review.errors.slice(0, 20), draft?.parsed?.rows)} />
+                    <IssueList issues={bankImportIssues(review.errors.slice(0, 20), rows)} />
                   </Callout>
                 )}
 
@@ -8227,7 +8551,18 @@ function CommandPalette({ open, onClose, setPage, openEntryModal, setCompanyModa
  * a `status` region rather than an `alert` — this is not an interruption, and
  * it must not steal focus from whatever somebody is typing.
  */
-function RunningTaskBanner({ label }: { label: string }) {
+/**
+ * What Wheat is busy with, and — where the work is interruptible — the way out.
+ *
+ * `progress` is shown only when it is a real count of real units of work.
+ * `onCancel` appears only for work that can genuinely be abandoned without
+ * leaving anything half-written behind.
+ */
+function RunningTaskBanner({ label, progress, onCancel }: {
+  label: string;
+  progress?: { completed: number; total: number } | null;
+  onCancel?: () => void;
+}) {
   return (
     <div className="wt-running-task" role="status" aria-live="polite">
       <AnimatePresence>
@@ -8239,7 +8574,15 @@ function RunningTaskBanner({ label }: { label: string }) {
             exit={{ opacity: 0, y: 8 }}
           >
             <LoaderCircle size={15} className="wt-running-task__spin" aria-hidden="true" />
-            <span>{label}</span>
+            <span>
+              {label}
+              {progress && progress.total > 0 ? ` — page ${progress.completed}/${progress.total}` : ""}
+            </span>
+            {onCancel && (
+              <button type="button" className="wt-running-task__cancel" onClick={onCancel}>
+                Annuler
+              </button>
+            )}
           </motion.div>
         )}
       </AnimatePresence>

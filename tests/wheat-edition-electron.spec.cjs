@@ -2,7 +2,7 @@ const { test, expect } = require("@playwright/test");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { root, builtEdition, freePort, waitForCdp, connectPage, launchWheat, stopWheat } = require("./wheat-electron-harness.cjs");
+const { builtEdition, connectPage, freePort, launchWheat, removeProfile, root, stopWheat, waitForCdp } = require("./wheat-electron-harness.cjs");
 
 /**
  * The edition, in a real running Wheat.
@@ -72,6 +72,6 @@ test("the built edition reaches the main process, the renderer and the document"
     expect(bootstrap.appVersion).toBe(reported.version);
   } finally {
     await stopWheat({ browser, ...launched });
-    fs.rmSync(profile, { recursive: true, force: true });
+    removeProfile(profile);
   }
 });

@@ -217,6 +217,41 @@ reconciles or posts anything.**
 `tests/wheat-bank-cloud-import-e2e.spec.cjs` takes a cloud-read statement through
 validation into the books and back out after a restart.
 
+#### What has and has not been proven against a live provider
+
+Recorded here because the distinction matters and is easy to lose: the parts
+below marked verified were observed, and the part marked **NOT VERIFIED** was
+attempted and did not succeed. Nothing here should be read as a claim that a
+scanned bank statement has been imported end to end through a real provider.
+
+**Verified on the packaged Lightweight build** (installed, `2.1.2609151`, no
+`paddleocr` in `resources/`):
+
+- a scanned statement no longer asks for PaddleOCR — the engine order is
+  `cloud → tesseract` and the bank path never reaches for the local runtime;
+- with no consent recorded, the import stops with `CONSENT_REQUIRED` before any
+  page is rendered, and the interface can obtain it and resume the same file;
+- with consent, the pages are rasterised, prepared and sent, and the provider
+  layer selects vision-capable models for them (`needsImages: true` in
+  `wheat-ai-diagnostics.log`);
+- a provider that fails leaves Wheat open, writes nothing, and reports a
+  sentence the accountant can act on.
+
+**Verified deterministically** (`wheat-bank-cloud-import-e2e.spec.cjs`, with a
+stub provider): a cloud-read statement maps itself, passes `reviewStatement`,
+imports as exact centimes, survives a reconnect, is caught by the ordinary
+duplicate guard, is blocked when a row carries both a debit and a credit, and
+imports the accountant's corrections rather than the original reading.
+
+**NOT VERIFIED — the live end-to-end read.** Three attempts against a real
+OpenRouter account returned no usable transcription: two models rate-limited,
+one returned an empty response after ~34 s, one was rejected upstream with
+`BAD_REQUEST`. The same pattern appears in that account's diagnostics from
+before this work, so it reflects the free tier available to it rather than
+anything in this path — but it means **no scanned bank statement has been read
+by a real provider, reviewed and imported**. Until one is, treat the live path
+as untested and the deterministic coverage above as what is actually known.
+
 ---
 
 ## Wheat Cloud AI

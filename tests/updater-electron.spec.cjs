@@ -8,6 +8,7 @@ const {
   connectPage,
   freePort,
   launchWheat,
+  removeProfile,
   runtimeTargetId,
   stopWheat,
   waitForCdp,
@@ -73,7 +74,7 @@ test("the installed-update modal appears once and Settings can manually check", 
     await expect(page.getByRole("dialog", { name: "Wheat a été mis à jour" })).toHaveCount(0);
   } finally {
     await stopWheat({ browser, child, token });
-    fs.rmSync(temporary, { recursive: true, force: true });
+    removeProfile(temporary);
   }
 });
 
@@ -151,6 +152,6 @@ test("an available update is offered and waits, and Plus tard stops interrupting
     await expect(page.getByRole("dialog", { name: "Une mise à jour de Wheat est disponible" })).toHaveCount(0);
   } finally {
     await stopWheat({ browser, child, token });
-    fs.rmSync(temporary, { recursive: true, force: true });
+    removeProfile(temporary);
   }
 });

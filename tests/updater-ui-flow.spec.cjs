@@ -43,6 +43,7 @@ const {
   connectPage,
   freePort,
   launchWheat,
+  removeProfile,
   runtimeTargetId,
   stopWheat,
   waitForCdp,
@@ -249,7 +250,7 @@ test("the download shows real moving figures, becomes installable, and a helper 
     await expect(page.getByLabel("Nom de la société")).toHaveValue("APRES ECHEC SARL");
   } finally {
     await stopWheat({ browser, child, token });
-    fs.rmSync(temporary, { recursive: true, force: true });
+    removeProfile(temporary);
   }
 });
 
@@ -353,6 +354,6 @@ test("a completed installation is confirmed on the next launch, once, with the a
     await expect(page.getByRole("dialog", { name: "Wheat a été mis à jour" })).toHaveCount(0);
   } finally {
     await stopWheat({ browser, child, token });
-    fs.rmSync(temporary, { recursive: true, force: true });
+    removeProfile(temporary);
   }
 });

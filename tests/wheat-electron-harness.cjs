@@ -122,7 +122,17 @@ function launchWheat({ port, profile, env = {}, label = "wheat" }) {
   return { child, token };
 }
 
-/** Closes the window politely, then makes sure nothing tagged with `token` survives. */
+/**
+ * Closes the window politely, then makes sure nothing tagged with `token`
+ * survives — and, unlike before, waits until that is actually true.
+ *
+ * `Stop-Process -Force` only *asks* Windows to terminate a process; it returns
+ * long before the kernel has closed that process's handles. A spec that deleted
+ * its throwaway profile on the next line was therefore racing Chromium's own
+ * teardown of `Cache`, `Network`, `GPUCache` and `DIPS-wal`, and lost often
+ * enough to fail a run whose assertions had all passed. Waiting for the exit is
+ * the difference between a teardown that is ordered and one that merely starts.
+ */
 async function stopWheat({ browser, child, token }) {
   try {
     if (browser?.isConnected()) {
@@ -133,9 +143,40 @@ async function stopWheat({ browser, child, token }) {
   } catch {}
   try { child?.kill(); } catch {}
   try {
-    const cleanup = `$token='${token.replace(/'/g, "''")}'; Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like ('*--'+$token+'*') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`;
-    execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", cleanup], { windowsHide: true, timeout: 15000 });
+    const safeToken = token.replace(/'/g, "''");
+    const cleanup = [
+      `$token='${safeToken}'`,
+      "$ids = @(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like ('*--'+$token+'*') } | ForEach-Object { $_.ProcessId })",
+      "foreach ($id in $ids) { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue }",
+      // The wait. WaitForExit blocks until the process is genuinely gone, so
+      // the handles it held are released before this command returns.
+      "foreach ($id in $ids) { try { (Get-Process -Id $id -ErrorAction Stop).WaitForExit(15000) | Out-Null } catch {} }",
+    ].join("; ");
+    execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", cleanup], { windowsHide: true, timeout: 30000 });
   } catch {}
+}
+
+/**
+ * Deletes a throwaway profile, once Windows has let go of it.
+ *
+ * Even after the processes Wheat's own token identifies have exited, a Chromium
+ * child can hold a file inside the profile for a few hundred milliseconds
+ * longer. Node's `maxRetries`/`retryDelay` exist for exactly this case — they
+ * retry on `EPERM` and `EBUSY` with a linear backoff — so the removal waits it
+ * out instead of failing the spec that owned the directory.
+ *
+ * A removal that still cannot finish is reported and not thrown. The subject of
+ * these specs is what Wheat does on screen; a directory left behind in `%TEMP%`
+ * is not a statement about that, and turning it into a red test taught nobody
+ * anything. A process that genuinely refused to die is worth seeing, so it is
+ * named on stderr rather than swallowed.
+ */
+function removeProfile(directory) {
+  try {
+    fs.rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  } catch (error) {
+    process.stderr.write(`[wheat-harness] could not remove ${directory}: ${error?.code ?? error}\n`);
+  }
 }
 
 
@@ -158,4 +199,4 @@ function builtEdition() {
   }
 }
 
-module.exports = { root, builtEdition, freePort, waitForCdp, connectPage, runtimeTargetId, connectNewRuntime, launchWheat, stopWheat, waitForWheatWindow };
+module.exports = { root, builtEdition, freePort, waitForCdp, connectPage, runtimeTargetId, connectNewRuntime, launchWheat, stopWheat, removeProfile, waitForWheatWindow };

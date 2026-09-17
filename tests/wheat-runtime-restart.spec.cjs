@@ -8,6 +8,7 @@ const {
   connectPage,
   freePort,
   launchWheat,
+  removeProfile,
   runtimeTargetId,
   stopWheat,
   waitForCdp,
@@ -72,6 +73,6 @@ test("a real Electron relaunch clears stale modal focus and restores keyboard in
     await page.getByRole("button", { name: "Annuler" }).click();
   } finally {
     await stopWheat({ browser, child, token });
-    fs.rmSync(temporary, { recursive: true, force: true });
+    removeProfile(temporary);
   }
 });

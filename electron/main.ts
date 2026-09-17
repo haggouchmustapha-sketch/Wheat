@@ -40,6 +40,7 @@ import {
   settleDocumentReview,
 } from "./documentReviewPayload";
 import { deriveReconciliationState, registerReconciliationIpc } from "./reconciliation";
+import { registerStockIpc } from "./stock";
 import { createFormDraftService, registerFormDraftIpc } from "./formDrafts";
 import { createWheatDossierSetupService, registerWheatDossierSetupIpc } from "./wheatDossierSetup";
 import { BANK_STATEMENT_PROGRESS_CHANNEL, parseBankStatement } from "./bankStatementImporter";
@@ -855,6 +856,10 @@ if (hasSingleInstanceLock) app.whenReady().then(() => {
   registerIpc();
   subledgerService = registerSubledgerIpc({ ipcMain, getPrisma: getAuthorizedPrisma, getActorUserId: getTrustedActorUserId, serialize });
   registerReconciliationIpc({ ipcMain, getPrisma: getAuthorizedPrisma, getActorUserId: getTrustedActorUserId, serialize });
+  // Stock. One module for the whole product: the valuation, the register and
+  // the accounting draft it generates are the same in every build, and nothing
+  // in it consults the edition.
+  registerStockIpc({ ipcMain, getPrisma: getAuthorizedPrisma, getActorUserId: getTrustedActorUserId, serialize });
   // Unfinished form contents. Deliberately registered alongside the domain
   // services and deliberately not one of them: it stores what somebody has
   // typed, and never becomes accounting data except through the service that
@@ -1471,6 +1476,14 @@ function registerIpc() {
     const bankMovementCount = await prisma.bankMovement.count({ where: { bankAccount: { companyId: id } } });
     if (bankMovementCount > 0) {
       throw new Error("Cette société contient un relevé bancaire importé. Excluez ou archivez les mouvements au lieu de supprimer leur historique.");
+    }
+    // Validated stock movements are immutable history in their own right, and a
+    // cascade delete would remove them without ever meeting the SQLite triggers
+    // that protect them. The dossier keeps them, exactly as it keeps a posted
+    // entry or an imported statement.
+    const stockMovementCount = await prisma.stockMovement.count({ where: { companyId: id } });
+    if (stockMovementCount > 0) {
+      throw new Error("Cette société contient des mouvements de stock validés. Wheat les conserve pour l'audit ; seule la réinitialisation explicite de tout l'espace peut les effacer.");
     }
 
     await prisma.company.delete({ where: { id } });

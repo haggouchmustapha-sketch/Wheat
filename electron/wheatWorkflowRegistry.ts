@@ -427,6 +427,47 @@ export const WHEAT_WORKFLOW_REGISTRY: readonly WheatWorkflowDefinition[] = Objec
   review("guided.approve", "wheat:guided:approve", "Approuver et exécuter une étape guidée", "Journey", "GUIDED_APPROVAL", 3),
   deterministic("guided.decide", "wheat:guided:decide", "Reporter ou écarter une étape guidée", "Journey",
     "Enregistre une décision humaine sur le parcours ; aucune écriture comptable n'en découle.", 1),
+
+  // ------------------------------------------------------------------ stock
+  // Stock mutations are deterministic by construction: what a document does to
+  // a position is arithmetic over the register, and the rules that can refuse
+  // it — période verrouillée, stock insuffisant, compte non paramétré,
+  // antériorité de date — are all decidable without a model. The validation
+  // itself carries the accounting risk, because it writes immutable movements
+  // and the brouillon comptable that mirrors them.
+  exempt("stock.workspace", "wheat:stock:workspace", "Ouvrir le stock", "StockArticle", READ_ONLY),
+  exempt("stock.state", "wheat:stock:state", "Consulter l'état du stock", "StockBalance", READ_ONLY),
+  exempt("stock.card", "wheat:stock:card", "Ouvrir la fiche de stock d'un article", "StockMovement", READ_ONLY),
+  exempt("stock.movement", "wheat:stock:movement", "Consulter le détail d'un mouvement", "StockMovement", READ_ONLY),
+  exempt("stock.documents", "wheat:stock:documents", "Lister les documents de stock", "StockDocument", READ_ONLY),
+  exempt("stock.document", "wheat:stock:document", "Consulter un document de stock", "StockDocument", READ_ONLY),
+  exempt("stock.lots", "wheat:stock:lots", "Lister les lots", "StockLot", READ_ONLY),
+  exempt("stock.document_preview_validation", "wheat:stock:document:preview-validation", "Prévisualiser une validation de stock", "StockDocument",
+    "Décrit ce que la validation ferait ; rien n'est écrit avant la validation elle-même, qui est contrôlée."),
+  deterministic("stock.document_save", "wheat:stock:document:save", "Créer ou modifier un brouillon de stock", "StockDocument",
+    "Un brouillon de stock ne déplace aucune quantité et ne génère aucune écriture ; seule la validation le fait.", 1),
+  deterministic("stock.document_delete", "wheat:stock:document:delete", "Supprimer un brouillon de stock", "StockDocument",
+    "Suppression d'un brouillon qui n'a jamais touché le stock ; un document validé ne peut pas être supprimé.", 1),
+  deterministic("stock.document_validate", "wheat:stock:document:validate", "Valider un document de stock", "StockDocument",
+    "Écrit des mouvements immuables, met à jour la valorisation et crée un brouillon comptable lié, dans une seule transaction entièrement déterministe.", 3),
+  deterministic("stock.document_reverse", "wheat:stock:document:reverse", "Contrepasser un document de stock", "StockDocument",
+    "Ajoute les mouvements inverses et restitue les couches FIFO d'origine ; l'historique validé n'est jamais réécrit.", 3),
+  deterministic("stock.article_save", "wheat:stock:article:save", "Créer ou modifier un article", "StockArticle",
+    "Fiche article : contrôles d'unicité et de méthode de valorisation, décidables sans modèle.", 1),
+  deterministic("stock.family_save", "wheat:stock:family:save", "Créer ou modifier une famille d'articles", "StockArticleFamily",
+    "Classement du catalogue, soumis à l'unicité du code dans le dossier.", 1),
+  deterministic("stock.unit_save", "wheat:stock:unit:save", "Créer ou modifier une unité", "StockUnit",
+    "Unité de mesure du catalogue, soumise à l'unicité du code dans le dossier.", 1),
+  deterministic("stock.warehouse_save", "wheat:stock:warehouse:save", "Créer ou modifier un dépôt", "StockWarehouse",
+    "Dépôt du dossier, soumis à l'unicité du code ; les positions existantes ne sont pas touchées.", 1),
+  deterministic("stock.lot_save", "wheat:stock:lot:save", "Créer ou modifier un lot", "StockLot",
+    "Identification d'un lot et de sa péremption ; la valorisation n'en dépend pas.", 1),
+  deterministic("stock.settings_save", "wheat:stock:settings:save", "Enregistrer le paramétrage du stock", "StockSettings",
+    "Choix du journal, des comptes de dépréciation et de la politique de stock négatif : décisions humaines vérifiées contre le dossier.", 2),
+  deterministic("stock.mapping_save", "wheat:stock:mapping:save", "Paramétrer les comptes de stock", "StockAccountMapping",
+    "Associe un compte de stock et un compte de variation existants ; sans ce paramétrage la validation est bloquée plutôt que devinée.", 2),
+  deterministic("stock.mapping_delete", "wheat:stock:mapping:delete", "Supprimer un paramétrage de comptes de stock", "StockAccountMapping",
+    "Retire une règle de paramétrage ; les écritures déjà générées ne sont pas touchées.", 2),
 ]);
 
 const BY_CHANNEL = new Map(WHEAT_WORKFLOW_REGISTRY.map((item) => [item.channel, item]));

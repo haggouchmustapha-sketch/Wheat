@@ -228,6 +228,12 @@ test("no accounting module consults the edition", () => {
     "fiscal21.ts", "compliance14.ts", "creditNotes14.ts", "entryCommands21.ts", "operations13.ts",
     "chartOfAccounts21.ts", "pieceNumbering21.ts", "audit13.ts", "database.ts", "dashboard.ts",
     "portfolio.ts", "bankStatementImporter.ts", "importValidation.ts", "wheatDossierSetup.ts",
+    // Stock is one module for the whole product: the same catalogue, the same
+    // CMP and FIFO arithmetic, the same register and the same generated
+    // accounting draft in every build. A quantity or a valuation that differed
+    // between two builds would be the same failure as a balance that did.
+    "stock.ts", "stockUnits.ts", "stockValuation.ts", "stockDomain.ts",
+    "stockValidation.ts", "stockAccounting.ts",
   ];
   const offenders = [];
   for (const file of accounting) {

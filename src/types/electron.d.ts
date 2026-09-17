@@ -28,6 +28,27 @@ declare global {
       deleteEntry: (entryId: string) => Promise<any>;
       lockFiscalPeriod: (payload: { companyId: string; fiscalYearId: string; lockedTo: string }) => Promise<any>;
       unlockFiscalPeriod: (payload: { companyId: string; fiscalYearId: string }) => Promise<any>;
+      /** Stock. Quantities and values arrive as exact decimal strings, never floats. */
+      getStockWorkspace: (payload: { companyId: string }) => Promise<any>;
+      getStockState: (payload: { companyId: string; warehouseId?: string | null; familyId?: string | null }) => Promise<any>;
+      getStockCard: (payload: Record<string, unknown>) => Promise<any>;
+      getStockMovement: (payload: { companyId: string; movementId: string }) => Promise<any>;
+      getStockDocuments: (payload: { companyId: string; status?: string | null; type?: string | null }) => Promise<any[]>;
+      getStockDocument: (payload: { companyId: string; documentId: string }) => Promise<any>;
+      saveStockDocument: (payload: Record<string, unknown>) => Promise<any>;
+      deleteStockDocument: (payload: { companyId: string; documentId: string }) => Promise<any>;
+      previewStockValidation: (payload: { companyId: string; documentId: string }) => Promise<any>;
+      validateStockDocument: (payload: { companyId: string; documentId: string; expectedVersion?: number }) => Promise<any>;
+      reverseStockDocument: (payload: { companyId: string; documentId: string; date?: string; reason?: string }) => Promise<any>;
+      saveStockArticle: (payload: Record<string, unknown>) => Promise<any>;
+      saveStockFamily: (payload: Record<string, unknown>) => Promise<any>;
+      saveStockUnit: (payload: Record<string, unknown>) => Promise<any>;
+      saveStockWarehouse: (payload: Record<string, unknown>) => Promise<any>;
+      saveStockLot: (payload: Record<string, unknown>) => Promise<any>;
+      getStockLots: (payload: { companyId: string; articleId?: string | null }) => Promise<any[]>;
+      saveStockSettings: (payload: Record<string, unknown>) => Promise<any>;
+      saveStockAccountMapping: (payload: Record<string, unknown>) => Promise<any>;
+      deleteStockAccountMapping: (payload: { companyId: string; id: string }) => Promise<any>;
       getReconciliationWorkspace: (payload: unknown) => Promise<any>;
       getReconciliationCandidates: (payload: unknown) => Promise<any>;
       confirmReconciliation: (payload: unknown) => Promise<any>;

@@ -58,6 +58,23 @@ model Company {
   sageExportProfile        SageExportProfile?
   guidedStepDecisions      GuidedStepDecision[]
   formDrafts               FormDraft[]
+  stockSettings            StockSettings?
+  stockAccountMappings     StockAccountMapping[]
+  stockUnits               StockUnit[]
+  stockUnitConversions     StockUnitConversion[]
+  stockArticleFamilies     StockArticleFamily[]
+  stockArticles            StockArticle[]
+  stockWarehouses          StockWarehouse[]
+  stockLots                StockLot[]
+  stockDocumentSequences   StockDocumentSequence[]
+  stockDocuments           StockDocument[]
+  stockMovements           StockMovement[]
+  stockBalances            StockBalance[]
+  stockFifoLayers          StockFifoLayer[]
+  stockFifoConsumptions    StockFifoConsumption[]
+  stockLandedCosts         StockLandedCost[]
+  stockInventoryCampaigns  StockInventoryCampaign[]
+  stockImpairments         StockImpairment[]
   version                  Int                       @default(1)
   createdAt                DateTime                  @default(now())
   updatedAt                DateTime                  @updatedAt
@@ -88,6 +105,8 @@ model FiscalYear {
   pieceSequences   JournalPieceSequence[]
   openingRuns      OpeningBalanceRun[]
   fiscalPackages   FiscalPackage[]
+  stockSequences   StockDocumentSequence[]
+  stockDocuments   StockDocument[]
 
   @@index([companyId, startsOn, endsOn])
 }
@@ -111,6 +130,11 @@ model User {
   vatWorkpapersFiled    VatWorkpaper[]            @relation("VatWorkpaperFiler")
   fiscalCloseRuns       FiscalCloseRun[]          @relation("FiscalCloseActor")
   fiscalTablesReviewed  FiscalTableWorkpaper[]    @relation("FiscalTableReviewer")
+  stockDocumentsCreated   StockDocument[]          @relation("StockDocumentCreator")
+  stockDocumentsValidated StockDocument[]          @relation("StockDocumentValidator")
+  stockCampaignsCreated   StockInventoryCampaign[] @relation("StockCampaignCreator")
+  stockCampaignsClosed    StockInventoryCampaign[] @relation("StockCampaignCloser")
+  stockImpairmentsCreated StockImpairment[]        @relation("StockImpairmentCreator")
 }
 
 model CompanyUser {
@@ -178,6 +202,11 @@ model Account {
   settledPayments          Payment[]            @relation("PaymentSettlement")
   taxRateDefinitions       TaxRateDefinition[]
   openingBalanceLines      OpeningBalanceLine[]
+  stockMappingsAsStock     StockAccountMapping[] @relation("StockMappingStockAccount")
+  stockMappingsAsVariation StockAccountMapping[] @relation("StockMappingVariationAccount")
+  stockImpairmentSettings  StockSettings[]       @relation("StockImpairmentAccount")
+  stockImpairmentCharges   StockSettings[]       @relation("StockImpairmentChargeAccount")
+  stockImpairmentReversals StockSettings[]       @relation("StockImpairmentReversalAccount")
 
   @@unique([companyId, code])
   @@index([companyId, active, classNo])
@@ -203,6 +232,7 @@ model Journal {
   company                  Company                @relation(fields: [companyId], references: [id], onDelete: Cascade)
   entries                  Entry[]
   pieceSequences           JournalPieceSequence[]
+  stockSettings            StockSettings[]        @relation("StockSettingsJournal")
 
   @@unique([companyId, code])
   @@index([companyId, active])
@@ -241,6 +271,8 @@ model Entry {
   postedPayment       Payment?          @relation("PaymentPosting")
   voidedPayment       Payment?          @relation("PaymentVoid")
   ledgerImportRows    LedgerImportRow[] @relation("LedgerImportDraft")
+  stockDocuments      StockDocument[]   @relation("StockDocumentEntry")
+  stockImpairments    StockImpairment[] @relation("StockImpairmentEntry")
   createdAt           DateTime          @default(now())
   updatedAt           DateTime          @updatedAt
 
@@ -325,6 +357,8 @@ model Counterparty {
   invoices                 Invoice[]
   payments                 Payment[]
   entryLines               EntryLine[]
+  stockArticles            StockArticle[]  @relation("StockArticleSupplier")
+  stockDocuments           StockDocument[]
 
   @@unique([companyId, identityKey])
   @@index([companyId, displayName])
@@ -1393,4 +1427,584 @@ model LocalAppSecurity {
   failedAttempts Int       @default(0)
   lockedUntil    DateTime?
   updatedAt      DateTime  @default(now()) @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Stock / inventory
+//
+// One stock module for the whole product. Quantities are exact BigInt at 1e6
+// and stock value is exact BigInt in micro-dirham (see
+// `electron/stockUnits.ts`); the conversion to the centimes an EntryLine
+// carries happens once, where a movement becomes accounting.
+//
+// The register is `StockMovement`, and it is append-only: SQLite triggers in
+// the migration refuse UPDATE and DELETE on it, because an application-layer
+// rule is a rule only for the code that remembers to ask. `StockBalance` is a
+// cache of the current position; history is always rebuilt from movements.
+// ---------------------------------------------------------------------------
+
+model StockSettings {
+  id                          String   @id @default(cuid())
+  companyId                   String   @unique
+  allowNegativeStock          Boolean  @default(false)
+  /// Monotonic per company. Orders movements inside a single day, and gives
+  /// FIFO a deterministic tie-break the register and the layers both agree on.
+  nextMovementSequence        BigInt   @default(1)
+  stockJournalId              String?
+  impairmentAccountId         String?
+  impairmentChargeAccountId   String?
+  impairmentReversalAccountId String?
+  version                     Int      @default(1)
+  createdAt                   DateTime @default(now())
+  updatedAt                   DateTime @updatedAt
+
+  company                   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  stockJournal              Journal? @relation("StockSettingsJournal", fields: [stockJournalId], references: [id], onDelete: SetNull)
+  impairmentAccount         Account? @relation("StockImpairmentAccount", fields: [impairmentAccountId], references: [id], onDelete: SetNull)
+  impairmentChargeAccount   Account? @relation("StockImpairmentChargeAccount", fields: [impairmentChargeAccountId], references: [id], onDelete: SetNull)
+  impairmentReversalAccount Account? @relation("StockImpairmentReversalAccount", fields: [impairmentReversalAccountId], references: [id], onDelete: SetNull)
+}
+
+/// Stock and variation accounts, resolved article then family then company.
+/// `scopeKey` carries the level in the value ("COMPANY", "FAMILY:<id>",
+/// "ARTICLE:<id>") so one company cannot hold two mappings for the same target:
+/// a unique over nullable familyId/articleId would not constrain anything,
+/// because SQLite treats every NULL as distinct.
+model StockAccountMapping {
+  id                 String   @id @default(cuid())
+  companyId          String
+  scope              String
+  scopeKey           String
+  familyId           String?
+  articleId          String?
+  stockAccountId     String
+  variationAccountId String
+  version            Int      @default(1)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  company          Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  family           StockArticleFamily? @relation(fields: [familyId], references: [id], onDelete: Cascade)
+  article          StockArticle?       @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  stockAccount     Account             @relation("StockMappingStockAccount", fields: [stockAccountId], references: [id])
+  variationAccount Account             @relation("StockMappingVariationAccount", fields: [variationAccountId], references: [id])
+
+  @@unique([companyId, scopeKey])
+  @@index([companyId, scope])
+}
+
+model StockUnit {
+  id        String   @id @default(cuid())
+  companyId String
+  code      String
+  label     String
+  decimals  Int      @default(0)
+  active    Boolean  @default(true)
+  version   Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company         Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  articles        StockArticle[]
+  documentLines   StockDocumentLine[]
+  conversionsFrom StockUnitConversion[] @relation("StockConversionFrom")
+  conversionsTo   StockUnitConversion[] @relation("StockConversionTo")
+
+  @@unique([companyId, code])
+  @@index([companyId, active])
+}
+
+/// `1 fromUnit = factor toUnit`, with `factor` scaled by 1e6 like every other
+/// quantity, so "1 carton = 12 unites" never becomes a floating-point 11,999999.
+model StockUnitConversion {
+  id         String   @id @default(cuid())
+  companyId  String
+  fromUnitId String
+  toUnitId   String
+  factor     BigInt
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  fromUnit StockUnit @relation("StockConversionFrom", fields: [fromUnitId], references: [id], onDelete: Cascade)
+  toUnit   StockUnit @relation("StockConversionTo", fields: [toUnitId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, fromUnitId, toUnitId])
+}
+
+model StockArticleFamily {
+  id             String   @id @default(cuid())
+  companyId      String
+  code           String
+  designation    String
+  parentFamilyId String?
+  active         Boolean  @default(true)
+  version        Int      @default(1)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  company       Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  parentFamily  StockArticleFamily?   @relation("StockFamilyTree", fields: [parentFamilyId], references: [id], onDelete: SetNull)
+  childFamilies StockArticleFamily[]  @relation("StockFamilyTree")
+  articles      StockArticle[]
+  mappings      StockAccountMapping[]
+
+  @@unique([companyId, code])
+  @@index([companyId, active])
+}
+
+model StockArticle {
+  id                String   @id @default(cuid())
+  companyId         String
+  sku               String
+  designation       String
+  description       String?
+  /// Unique per company where populated. SQLite treats NULLs as distinct, so an
+  /// article without a barcode never collides with another one.
+  barcode           String?
+  familyId          String?
+  unitId            String
+  valuationMethod   String   @default("CMP")
+  minQuantity       BigInt   @default(0)
+  maxQuantity       BigInt?
+  lotTracking       Boolean  @default(false)
+  expiryTracking    Boolean  @default(false)
+  active            Boolean  @default(true)
+  defaultSupplierId String?
+  notes             String?
+  customFieldsJson  String   @default("{}")
+  searchText        String   @default("")
+  version           Int      @default(1)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  company         Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  family          StockArticleFamily?   @relation(fields: [familyId], references: [id], onDelete: SetNull)
+  unit            StockUnit             @relation(fields: [unitId], references: [id])
+  defaultSupplier Counterparty?         @relation("StockArticleSupplier", fields: [defaultSupplierId], references: [id], onDelete: SetNull)
+  mappings        StockAccountMapping[]
+  lots            StockLot[]
+  documentLines   StockDocumentLine[]
+  movements       StockMovement[]
+  balances        StockBalance[]
+  fifoLayers      StockFifoLayer[]
+  inventoryCounts StockInventoryCount[]
+  impairments     StockImpairment[]
+
+  @@unique([companyId, sku])
+  @@unique([companyId, barcode])
+  @@index([companyId, active, familyId])
+  @@index([companyId, searchText])
+}
+
+model StockWarehouse {
+  id        String   @id @default(cuid())
+  companyId String
+  code      String
+  name      String
+  address   String?
+  active    Boolean  @default(true)
+  version   Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company             Company                  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  locations           StockLocation[]
+  documents           StockDocument[]          @relation("StockDocumentWarehouse")
+  targetedByDocuments StockDocument[]          @relation("StockDocumentTargetWarehouse")
+  documentLines       StockDocumentLine[]
+  movements           StockMovement[]
+  balances            StockBalance[]
+  fifoLayers          StockFifoLayer[]
+  campaigns           StockInventoryCampaign[]
+  impairments         StockImpairment[]
+
+  @@unique([companyId, code])
+  @@index([companyId, active])
+}
+
+model StockLocation {
+  id          String   @id @default(cuid())
+  warehouseId String
+  code        String
+  label       String
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  warehouse     StockWarehouse        @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  documentLines StockDocumentLine[]
+  movements     StockMovement[]
+  counts        StockInventoryCount[]
+
+  @@unique([warehouseId, code])
+}
+
+model StockLot {
+  id        String    @id @default(cuid())
+  companyId String
+  articleId String
+  code      String
+  expiresOn DateTime?
+  note      String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  company       Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  article       StockArticle          @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  documentLines StockDocumentLine[]
+  movements     StockMovement[]
+  balances      StockBalance[]
+  fifoLayers    StockFifoLayer[]
+  counts        StockInventoryCount[]
+
+  @@unique([companyId, articleId, code])
+  @@index([companyId, expiresOn])
+}
+
+/// Per company and fiscal year, one counter per document type: stock document
+/// numbering is its own concept and never borrows `JournalPieceSequence`, which
+/// numbers accounting pieces and answers to a different authority.
+model StockDocumentSequence {
+  id           String   @id @default(cuid())
+  companyId    String
+  fiscalYearId String
+  type         String
+  prefix       String
+  nextNumber   Int      @default(1)
+  lastIssued   Int      @default(0)
+  padding      Int      @default(6)
+  version      Int      @default(1)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  company    Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  fiscalYear FiscalYear @relation(fields: [fiscalYearId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, fiscalYearId, type])
+}
+
+model StockDocument {
+  id                   String    @id @default(cuid())
+  companyId            String
+  fiscalYearId         String
+  type                 String
+  reference            String
+  documentDate         DateTime
+  warehouseId          String
+  targetWarehouseId    String?
+  counterpartyId       String?
+  status               String    @default("DRAFT")
+  note                 String?
+  createdByUserId      String?
+  validatedByUserId    String?
+  validatedAt          DateTime?
+  reversalOfId         String?
+  reversedAt           DateTime?
+  accountingEntryId    String?
+  inventoryCampaignId  String?
+  version              Int       @default(1)
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  company           Company                 @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  fiscalYear        FiscalYear              @relation(fields: [fiscalYearId], references: [id])
+  warehouse         StockWarehouse          @relation("StockDocumentWarehouse", fields: [warehouseId], references: [id])
+  targetWarehouse   StockWarehouse?         @relation("StockDocumentTargetWarehouse", fields: [targetWarehouseId], references: [id])
+  counterparty      Counterparty?           @relation(fields: [counterpartyId], references: [id], onDelete: Restrict)
+  createdBy         User?                   @relation("StockDocumentCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  validatedBy       User?                   @relation("StockDocumentValidator", fields: [validatedByUserId], references: [id], onDelete: SetNull)
+  reversalOf        StockDocument?          @relation("StockDocumentReversals", fields: [reversalOfId], references: [id], onDelete: Restrict)
+  reversals         StockDocument[]         @relation("StockDocumentReversals")
+  accountingEntry   Entry?                  @relation("StockDocumentEntry", fields: [accountingEntryId], references: [id], onDelete: SetNull)
+  inventoryCampaign StockInventoryCampaign? @relation(fields: [inventoryCampaignId], references: [id], onDelete: SetNull)
+  lines             StockDocumentLine[]
+  movements         StockMovement[]
+  landedCosts       StockLandedCost[]
+  fifoLayers        StockFifoLayer[]
+  fifoConsumptions  StockFifoConsumption[]
+
+  @@unique([companyId, reference])
+  @@index([companyId, status, documentDate])
+  @@index([companyId, type, documentDate])
+  @@index([accountingEntryId])
+}
+
+model StockDocumentLine {
+  id                   String    @id @default(cuid())
+  documentId           String
+  position             Int
+  articleId            String
+  /// Always positive. Direction belongs to the document type; an ADJUSTMENT
+  /// states its own in `direction` rather than by carrying a negative quantity.
+  quantity             BigInt
+  unitId               String
+  warehouseId          String
+  locationId           String?
+  lotId                String?
+  expiresOn            DateTime?
+  direction            String?
+  /// What the user entered for an acquisition, in micro-dirham per unit.
+  unitValue            BigInt?
+  /// Entered line value before landed costs, in micro-dirham.
+  grossValue           BigInt    @default(0)
+  /// Landed costs allocated to this line, in micro-dirham.
+  allocatedChargeValue BigInt    @default(0)
+  /// The authoritative value the validation actually moved, written once.
+  stockValue           BigInt?
+  description          String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  document         StockDocument               @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  article          StockArticle                @relation(fields: [articleId], references: [id], onDelete: Restrict)
+  unit             StockUnit                   @relation(fields: [unitId], references: [id])
+  warehouse        StockWarehouse              @relation(fields: [warehouseId], references: [id])
+  location         StockLocation?              @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  lot              StockLot?                   @relation(fields: [lotId], references: [id], onDelete: Restrict)
+  movements        StockMovement[]
+  fifoLayers       StockFifoLayer[]
+  fifoConsumptions StockFifoConsumption[]
+  costAllocations  StockLandedCostAllocation[]
+
+  @@unique([documentId, position])
+  @@index([articleId])
+}
+
+/// The register. Append-only, enforced by SQLite triggers: a validated movement
+/// is never edited or deleted, and a correction is a reversal that appends its
+/// own opposite movements.
+model StockMovement {
+  id                String   @id @default(cuid())
+  companyId         String
+  articleId         String
+  warehouseId       String
+  locationId        String?
+  lotId             String?
+  documentId        String
+  documentLineId    String
+  documentType      String
+  documentDate      DateTime
+  sequence          BigInt
+  direction         String
+  quantity          BigInt
+  value             BigInt
+  resultingQuantity BigInt
+  resultingValue    BigInt
+  counterpartyId    String?
+  createdByUserId   String?
+  createdAt         DateTime @default(now())
+
+  company      Company                @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  article      StockArticle           @relation(fields: [articleId], references: [id], onDelete: Restrict)
+  warehouse    StockWarehouse         @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  location     StockLocation?         @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  lot          StockLot?              @relation(fields: [lotId], references: [id], onDelete: Restrict)
+  document     StockDocument          @relation(fields: [documentId], references: [id], onDelete: Restrict)
+  documentLine StockDocumentLine      @relation(fields: [documentLineId], references: [id], onDelete: Restrict)
+  consumptions StockFifoConsumption[]
+
+  @@unique([companyId, sequence])
+  @@index([companyId, articleId, warehouseId, documentDate, sequence])
+  @@index([companyId, documentDate])
+  @@index([documentId])
+}
+
+model StockBalance {
+  id          String   @id @default(cuid())
+  companyId   String
+  articleId   String
+  warehouseId String
+  lotId       String?
+  /// "" when the article is not lot-tracked, so the unique below actually
+  /// constrains the no-lot position instead of permitting a row per insert.
+  lotKey      String   @default("")
+  quantity    BigInt   @default(0)
+  value       BigInt   @default(0)
+  version     Int      @default(1)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  company   Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  article   StockArticle   @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  warehouse StockWarehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  lot       StockLot?      @relation(fields: [lotId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, articleId, warehouseId, lotKey])
+  @@index([companyId, articleId])
+}
+
+model StockFifoLayer {
+  id                String    @id @default(cuid())
+  companyId         String
+  articleId         String
+  warehouseId       String
+  lotId             String?
+  documentId        String
+  documentLineId    String
+  documentDate      DateTime
+  sequence          BigInt
+  quantityReceived  BigInt
+  quantityRemaining BigInt
+  valueReceived     BigInt
+  valueRemaining    BigInt
+  counterpartyId    String?
+  expiresOn         DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  company      Company                @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  article      StockArticle           @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  warehouse    StockWarehouse         @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  lot          StockLot?              @relation(fields: [lotId], references: [id], onDelete: Restrict)
+  document     StockDocument          @relation(fields: [documentId], references: [id], onDelete: Restrict)
+  documentLine StockDocumentLine      @relation(fields: [documentLineId], references: [id], onDelete: Restrict)
+  consumptions StockFifoConsumption[]
+
+  @@index([companyId, articleId, warehouseId, documentDate, sequence])
+  @@index([documentLineId])
+}
+
+/// Why a given issue cost what it cost, layer by layer. Written for every layer
+/// an issue touches: it is what a reversal gives the value back to, and what
+/// answers "which purchase did this sale consume" once the layer is long gone.
+///
+/// Append-only like the register it explains. A reversal does not edit the row
+/// it undoes — it appends a `RESTORATION` carrying the same quantity and the
+/// same value back to the same layer, so the layer's history reads as what
+/// happened rather than as what survived.
+model StockFifoConsumption {
+  id             String   @id @default(cuid())
+  companyId      String
+  layerId        String
+  movementId     String
+  documentId     String
+  documentLineId String
+  kind           String   @default("CONSUMPTION")
+  quantity       BigInt
+  value          BigInt
+  exhausted      Boolean  @default(false)
+  createdAt      DateTime @default(now())
+
+  company      Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  layer        StockFifoLayer    @relation(fields: [layerId], references: [id], onDelete: Restrict)
+  movement     StockMovement     @relation(fields: [movementId], references: [id], onDelete: Restrict)
+  document     StockDocument     @relation(fields: [documentId], references: [id], onDelete: Restrict)
+  documentLine StockDocumentLine @relation(fields: [documentLineId], references: [id], onDelete: Restrict)
+
+  @@index([movementId])
+  @@index([layerId])
+}
+
+model StockLandedCost {
+  id               String   @id @default(cuid())
+  companyId        String
+  documentId       String
+  position         Int
+  kind             String
+  label            String
+  amount           BigInt
+  allocationMethod String   @default("VALUE")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  company     Company                     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  document    StockDocument               @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  allocations StockLandedCostAllocation[]
+
+  @@unique([documentId, position])
+}
+
+model StockLandedCostAllocation {
+  id             String   @id @default(cuid())
+  landedCostId   String
+  documentLineId String
+  amount         BigInt
+  createdAt      DateTime @default(now())
+
+  landedCost   StockLandedCost   @relation(fields: [landedCostId], references: [id], onDelete: Cascade)
+  documentLine StockDocumentLine @relation(fields: [documentLineId], references: [id], onDelete: Cascade)
+
+  @@unique([landedCostId, documentLineId])
+}
+
+model StockInventoryCampaign {
+  id              String    @id @default(cuid())
+  companyId       String
+  reference       String
+  warehouseId     String
+  countDate       DateTime
+  status          String    @default("OPEN")
+  note            String?
+  createdByUserId String?
+  closedAt        DateTime?
+  closedByUserId  String?
+  version         Int       @default(1)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  company   Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  warehouse StockWarehouse        @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  createdBy User?                 @relation("StockCampaignCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  closedBy  User?                 @relation("StockCampaignCloser", fields: [closedByUserId], references: [id], onDelete: SetNull)
+  counts    StockInventoryCount[]
+  documents StockDocument[]
+
+  @@unique([companyId, reference])
+  @@index([companyId, status])
+}
+
+model StockInventoryCount {
+  id               String   @id @default(cuid())
+  campaignId       String
+  articleId        String
+  lotId            String?
+  lotKey           String   @default("")
+  locationId       String?
+  expectedQuantity BigInt   @default(0)
+  expectedValue    BigInt   @default(0)
+  countedQuantity  BigInt?
+  note             String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  campaign StockInventoryCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  article  StockArticle           @relation(fields: [articleId], references: [id], onDelete: Restrict)
+  lot      StockLot?              @relation(fields: [lotId], references: [id], onDelete: Restrict)
+  location StockLocation?         @relation(fields: [locationId], references: [id], onDelete: SetNull)
+
+  @@unique([campaignId, articleId, lotKey])
+}
+
+/// An impairment changes what stock is worth in the accounts without changing
+/// what is physically there, so it writes no movement and touches no balance.
+model StockImpairment {
+  id                String    @id @default(cuid())
+  companyId         String
+  reference         String
+  articleId         String
+  warehouseId       String?
+  impairmentDate    DateTime
+  valueBefore       BigInt
+  amount            BigInt
+  reason            String
+  status            String    @default("ACTIVE")
+  accountingEntryId String?
+  reversalOfId      String?
+  reversedAt        DateTime?
+  createdByUserId   String?
+  version           Int       @default(1)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  company         Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  article         StockArticle      @relation(fields: [articleId], references: [id], onDelete: Restrict)
+  warehouse       StockWarehouse?   @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  accountingEntry Entry?            @relation("StockImpairmentEntry", fields: [accountingEntryId], references: [id], onDelete: SetNull)
+  reversalOf      StockImpairment?  @relation("StockImpairmentReversals", fields: [reversalOfId], references: [id], onDelete: Restrict)
+  reversals       StockImpairment[] @relation("StockImpairmentReversals")
+  createdBy       User?             @relation("StockImpairmentCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([companyId, reference])
+  @@index([companyId, articleId, status])
 }

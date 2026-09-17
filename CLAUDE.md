@@ -34,6 +34,7 @@ Read the existing implementation and its schema/types first. Prefer extending th
 
 Important areas:
 - Accounting/domain logic: `electron/accounting.ts`, `subledger.ts`, `reconciliation.ts`, `reporting*.ts`, `fiscal*.ts`, `compliance*.ts`
+- Stock/inventory: `electron/stock*.ts` — see `docs/wheat-stock.md`. Quantities and stock value are exact `BigInt` at 1e6 (micro-dirham for value) and convert to centimes exactly once, where a movement becomes an accounting line. `StockMovement` is append-only at the database level; corrections are contrepassations.
 - OCR/import: `bankStatementImporter.ts`, `smartOcr.ts`, `paddleOcr.ts`
 - Audit: `audit13.ts`
 - Security: `securityBoundary.ts`, `localSecurity.ts`

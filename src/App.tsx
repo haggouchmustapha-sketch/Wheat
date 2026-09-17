@@ -14,6 +14,7 @@ import {
   Banknote,
   BarChart3,
   BookOpen,
+  Boxes,
   Building2,
   Calendar,
   ChevronLeft,
@@ -149,6 +150,7 @@ const FiscalWorkspace = lazy(() => import("./components/FiscalWorkspace").then((
 const WheatAiWorkspace = lazy(() => import("./components/FiscalWorkspace").then((module) => ({ default: module.WheatAiWorkspace })));
 const GuidedWork = lazy(() => import("./components/GuidedWork").then((module) => ({ default: module.GuidedWork })));
 const PortfolioWorkspace = lazy(() => import("./components/PortfolioWorkspace"));
+const StockWorkspace = lazy(() => import("./components/StockWorkspace"));
 const WheatAiProviderSettings = lazy(() => import("./components/WheatAiProviderSettings").then((module) => ({ default: module.WheatAiProviderSettings })));
 
 /**
@@ -189,6 +191,7 @@ type Page =
   | "entries"
   | "documents"
   | "billing"
+  | "stock"
   | "reconciliation"
   | "vat"
   | "payroll"
@@ -339,6 +342,7 @@ const navItems: Array<{ page: Page; label: string; icon: any }> = [
   { page: "entries", label: "Écritures", icon: BookOpen },
   { page: "documents", label: "Documents & OCR", icon: FileText },
   { page: "billing", label: "Factures & paiements", icon: Banknote },
+  { page: "stock", label: "Stock", icon: Boxes },
   { page: "payroll", label: "Paie", icon: Users },
   { page: "reconciliation", label: "Banque & rapprochement", icon: Landmark },
   { page: "vat", label: "TVA", icon: Percent },
@@ -368,7 +372,7 @@ const navGroups: NavGroup[] = [
   {
     id: "saisie",
     label: { fr: "Saisie & pièces", en: "Bookkeeping", ar: "القيد والوثائق" },
-    pages: ["entries", "documents", "billing", "payroll"],
+    pages: ["entries", "documents", "billing", "stock", "payroll"],
   },
   {
     id: "banque",
@@ -412,6 +416,7 @@ const pagePurpose: Record<Page, string> = {
   entries: "Saisir et comptabiliser les écritures, la brique de base de la comptabilité.",
   documents: "Importer factures et justificatifs, lire les montants automatiquement (OCR) et les contrôler.",
   billing: "Factures de vente et d'achat, avoirs, tiers et règlements.",
+  stock: "Articles, dépôts et mouvements de stock : quantités, valorisation CMP ou FIFO et écritures liées.",
   payroll: "Salariés, éléments de paie et écriture comptable de la paie mensuelle.",
   reconciliation: "Importer les relevés bancaires et rapprocher chaque mouvement d'une écriture.",
   vat: "Préparer, contrôler et archiver la déclaration de TVA avec ses justificatifs.",
@@ -436,6 +441,7 @@ const pageShortHelp: Record<Page, string> = {
   entries: "Saisir au journal",
   documents: "Lire les pièces",
   billing: "Facturer et encaisser",
+  stock: "Suivre et valoriser le stock",
   payroll: "Payer les salariés",
   reconciliation: "Pointer la banque",
   vat: "Déclarer la TVA",
@@ -481,6 +487,7 @@ const navLabels: Record<AppLanguage, Partial<Record<Page, string>>> = {
     entries: "Écritures",
     documents: "Documents & OCR",
     billing: "Factures & paiements",
+    stock: "Stock",
     payroll: "Paie",
     reconciliation: "Banque & rapprochement",
     vat: "TVA",
@@ -503,6 +510,7 @@ const navLabels: Record<AppLanguage, Partial<Record<Page, string>>> = {
     entries: "Journal entries",
     documents: "Documents & OCR",
     billing: "Invoices & payments",
+    stock: "Stock",
     payroll: "Payroll",
     reconciliation: "Bank & reconciliation",
     vat: "VAT",
@@ -525,6 +533,7 @@ const navLabels: Record<AppLanguage, Partial<Record<Page, string>>> = {
     entries: "القيود",
     documents: "الوثائق",
     billing: "الفواتير والمدفوعات",
+    stock: "المخزون",
     payroll: "الأجور",
     reconciliation: "البنك والتسوية",
     vat: "TVA",
@@ -2150,6 +2159,17 @@ function App() {
                   deleteCompany={deleteCompany}
                   setPage={setPage}
                 />
+              )}
+              {page === "stock" && (
+                <PageFrame page="stock" language={language} icon={<Boxes size={18} aria-hidden="true" />}>
+                  <WorkspaceChunk label="Chargement du stock…">
+                    <StockWorkspace
+                      companyId={activeCompanyId}
+                      notify={notify}
+                      openEntry={(entryId: string) => { setPage("entries"); void entryId; }}
+                    />
+                  </WorkspaceChunk>
+                </PageFrame>
               )}
               {page === "portfolio" && (
                 <PageFrame page="portfolio" language={language} icon={<ListChecks size={18} aria-hidden="true" />}>

@@ -185,6 +185,65 @@ export async function postDraftEntryInTransaction(tx: any, entryId: string, comp
   return tx.entry.findUniqueOrThrow({ where: { id: entry.id }, include: { journal: true, lines: { include: { account: true }, orderBy: { position: "asc" } } } });
 }
 
+/**
+ * Creates an entry inside a transaction the caller already owns.
+ *
+ * The same reference validation, the same piece-number allocation and the same
+ * row shape `createEntry` has always used, reachable from a domain that needs
+ * the entry to live or die with its own work — stock validation writes an
+ * immutable movement and its accounting draft together, and a draft that
+ * survived a rolled-back movement would be a posting for stock that never
+ * moved. Extracted rather than reimplemented: a second copy of this is a second
+ * place for the journal, account and period rules to drift.
+ *
+ * The caller decides what happens next. Posting is still
+ * `postDraftEntryInTransaction`, and the audit event belongs to the workflow
+ * that had a reason to create the entry.
+ */
+export async function createEntryInTransaction(
+  tx: any,
+  normalized: EntryPayload,
+  options: { auditNote?: string } = {},
+) {
+  const references = await validateEntryCommandReferences(tx, normalized);
+  const piece = await allocatePieceNumber(tx, {
+    companyId: normalized.companyId,
+    journalId: normalized.journalId,
+    date: normalized.date,
+    requestedPieceNumber: normalized.pieceNumber,
+    source: normalized.source,
+  });
+  const created = await tx.entry.create({
+    data: {
+      companyId: normalized.companyId,
+      journalId: normalized.journalId,
+      journalCodeSnapshot: references.journal.code,
+      number: provisionalEntryNumber(),
+      date: normalized.date,
+      ...piece,
+      label: normalized.label,
+      status: ENTRY_STATUS.draft,
+      source: normalized.source,
+      auditNote: options.auditNote
+        ?? (isWheatAiOrigin(normalized.source)
+          ? "Brouillon créé par Wheat AI à la demande de l'utilisateur"
+          : "Brouillon créé depuis Wheat Desktop"),
+      lines: { create: normalized.lines.map((line, index) => ({
+        position: index + 1,
+        accountId: line.accountId,
+        accountCodeSnapshot: references.accountById.get(line.accountId)!.code,
+        accountLabelSnapshot: references.accountById.get(line.accountId)!.label,
+        label: line.label,
+        debitCents: line.debitCents,
+        creditCents: line.creditCents,
+        thirdParty: line.thirdParty,
+        counterpartyId: line.counterpartyId,
+      })) },
+    },
+  });
+  return { created, references };
+}
+
 async function actorId(options: EntryCommandOptions) {
   return await options.getActorUserId?.() ?? null;
 }
@@ -255,33 +314,7 @@ export function createEntryCommandService(options: EntryCommandOptions) {
       const prisma = await options.getPrisma();
       const trustedActor = await actorId(options);
       return prisma.$transaction(async (tx: any) => {
-        const references = await validateEntryCommandReferences(tx, normalized);
-        const piece = await allocatePieceNumber(tx, { companyId: normalized.companyId, journalId: normalized.journalId, date: normalized.date, requestedPieceNumber: normalized.pieceNumber, source: normalized.source });
-        const created = await tx.entry.create({
-          data: {
-            companyId: normalized.companyId,
-            journalId: normalized.journalId,
-            journalCodeSnapshot: references.journal.code,
-            number: provisionalEntryNumber(),
-            date: normalized.date,
-            ...piece,
-            label: normalized.label,
-            status: ENTRY_STATUS.draft,
-            source: normalized.source,
-            auditNote: isWheatAiOrigin(normalized.source) ? "Brouillon créé par Wheat AI à la demande de l'utilisateur" : "Brouillon créé depuis Wheat Desktop",
-            lines: { create: normalized.lines.map((line, index) => ({
-              position: index + 1,
-              accountId: line.accountId,
-              accountCodeSnapshot: references.accountById.get(line.accountId)!.code,
-              accountLabelSnapshot: references.accountById.get(line.accountId)!.label,
-              label: line.label,
-              debitCents: line.debitCents,
-              creditCents: line.creditCents,
-              thirdParty: line.thirdParty,
-              counterpartyId: line.counterpartyId,
-            })) },
-          },
-        });
+        const { created } = await createEntryInTransaction(tx, normalized);
         const result = normalized.status === ENTRY_STATUS.posted
           ? await postDraftEntryInTransaction(tx, created.id, normalized.companyId)
           : await tx.entry.findUniqueOrThrow({ where: { id: created.id }, include: { journal: true, lines: { include: { account: true }, orderBy: { position: "asc" } } } });

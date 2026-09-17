@@ -468,7 +468,55 @@ export const WHEAT_WORKFLOW_REGISTRY: readonly WheatWorkflowDefinition[] = Objec
     "Associe un compte de stock et un compte de variation existants ; sans ce paramétrage la validation est bloquée plutôt que devinée.", 2),
   deterministic("stock.mapping_delete", "wheat:stock:mapping:delete", "Supprimer un paramétrage de comptes de stock", "StockAccountMapping",
     "Retire une règle de paramétrage ; les écritures déjà générées ne sont pas touchées.", 2),
+  deterministic("stock.unit_conversion_save", "wheat:stock:unit-conversion:save", "Paramétrer une conversion d'unités", "StockUnitConversion",
+    "Enregistre « 1 carton = 12 unités » après avoir vérifié que le facteur ne contredit pas les conversions existantes ; les lignes déjà écrites gardent le facteur qu'elles ont figé.", 1),
+  deterministic("stock.unit_conversion_delete", "wheat:stock:unit-conversion:delete", "Retirer une conversion d'unités", "StockUnitConversion",
+    "Désactive une conversion sans toucher aux documents qui l'ont utilisée.", 1),
+
+  // ---------------------------------------------------- inventaire physique
+  // Un inventaire est un constat, puis un ajustement. Le gel et le comptage
+  // n'écrivent aucun mouvement ; la validation en écrit, et elle le fait par le
+  // même chemin que tout autre document de stock — période, numérotation,
+  // registre immuable et brouillon comptable équilibré compris.
+  exempt("stock.inventory_list", "wheat:stock:inventory:list", "Lister les campagnes d'inventaire", "StockInventoryCampaign", READ_ONLY),
+  exempt("stock.inventory_get", "wheat:stock:inventory:get", "Ouvrir une feuille de comptage", "StockInventoryCampaign", READ_ONLY),
+  deterministic("stock.inventory_create", "wheat:stock:inventory:create", "Créer une campagne d'inventaire", "StockInventoryCampaign",
+    "Ouvre une campagne datée ; rien n'est mesuré ni écrit tant que l'inventaire théorique n'est pas figé.", 1),
+  deterministic("stock.inventory_freeze", "wheat:stock:inventory:freeze", "Figer l'inventaire théorique", "StockInventoryCampaign",
+    "Reconstruit la position théorique à la date d'inventaire à partir des mouvements ; aucune quantité comptée n'est perdue lors d'un rafraîchissement.", 1),
+  deterministic("stock.inventory_count", "wheat:stock:inventory:count", "Saisir des quantités comptées", "StockInventoryCount",
+    "Enregistre un constat physique ; aucun mouvement de stock ni écriture n'en découle avant la validation.", 1),
+  deterministic("stock.inventory_status", "wheat:stock:inventory:status", "Changer l'état d'une campagne d'inventaire", "StockInventoryCampaign",
+    "Transition d'état entre comptage, revue et annulation ; n'écrit ni mouvement ni écriture.", 1),
+  deterministic("stock.inventory_validate", "wheat:stock:inventory:validate", "Valider un inventaire physique", "StockInventoryCampaign",
+    "Écrit les écarts constatés sous forme de documents d'excédent et de manquant validés, avec leurs mouvements immuables et leur brouillon comptable ; refuse si la base théorique a changé depuis le gel.", 3),
+
+  // --------------------------------------------------------- dépréciations
+  // Une dépréciation ne déplace rien : elle ne touche ni le registre ni les
+  // couches FIFO. C'est une écriture, et rien qu'une écriture, donc elle est
+  // bloquée tant que les comptes de provision, de dotation et de reprise ne
+  // sont pas paramétrés.
+  exempt("stock.impairment_list", "wheat:stock:impairment:list", "Lister les dépréciations de stock", "StockImpairment", READ_ONLY),
+  exempt("stock.impairment_preview", "wheat:stock:impairment:preview", "Consulter la valeur comptable avant dépréciation", "StockImpairment", READ_ONLY),
+  deterministic("stock.impairment_save", "wheat:stock:impairment:save", "Constater une dépréciation de stock", "StockImpairment",
+    "Calcule la provision comme la différence exacte entre valeur comptable et valeur recouvrable saisie, et génère un brouillon comptable équilibré sur les comptes explicitement paramétrés.", 3),
+  deterministic("stock.impairment_reverse", "wheat:stock:impairment:reverse", "Reprendre une dépréciation de stock", "StockImpairment",
+    "Ajoute une reprise datée avec sa propre écriture ; la dépréciation d'origine garde toutes ses valeurs.", 3),
+
+  // ---------------------------------------------------------------- import
+  exempt("stock.import_preview", "wheat:stock:import:preview", "Prévisualiser un import de stock", "StockArticle",
+    "Lit le fichier, applique l'association de colonnes choisie et énumère les refus ; n'ouvre aucune transaction et n'écrit rien."),
+  deterministic("stock.import_confirm", "wheat:stock:import:confirm", "Confirmer un import de stock", "StockArticle",
+    "Relit le fichier, le revalide contre le catalogue actuel et l'écrit intégralement ou pas du tout ; un doublon exige un choix explicite et aucun compte n'est deviné.", 2),
+
+  // --------------------------------------------------------------- rapports
+  exempt("stock.report_valuation", "wheat:stock:report:valuation", "État de valorisation du stock", "StockBalance", READ_ONLY),
+  exempt("stock.report_movements", "wheat:stock:report:movements", "Journal des mouvements de stock", "StockMovement", READ_ONLY),
+  exempt("stock.report_variance", "wheat:stock:report:variance", "Rapport d'écarts d'inventaire", "StockInventoryCount", READ_ONLY),
+  exempt("stock.report_anomalies", "wheat:stock:report:anomalies", "Anomalies de stock", "StockBalance", READ_ONLY),
+  exempt("stock.report_ageing", "wheat:stock:report:ageing", "Rotation et stock dormant", "StockBalance", READ_ONLY),
 ]);
+
 
 const BY_CHANNEL = new Map(WHEAT_WORKFLOW_REGISTRY.map((item) => [item.channel, item]));
 const BY_ID = new Map(WHEAT_WORKFLOW_REGISTRY.map((item) => [item.id, item]));

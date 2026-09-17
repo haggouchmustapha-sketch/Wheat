@@ -2,7 +2,6 @@ import fs from "node:fs";
 import os from "node:os";
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
-import { createRequire } from "node:module";
 import path from "node:path";
 import type { App } from "electron";
 import type { StatementColumnMapping } from "./reconciliation";
@@ -19,14 +18,30 @@ import { CloudOcrUnavailableError, type RecognitionPlan } from "./cloudOcr";
 import type { AiReviewChat } from "./ocrAiReview";
 import { buildCloudImage, renderPdfPages, resolvePdfWorkerUrl } from "./pageImages";
 import { readWheatEnv } from "./runtimeEnvironment";
+import {
+  decodeText,
+  detectSeparator,
+  parseDelimited as sharedParseDelimited,
+  readXlsxMatrix,
+  tableFromMatrix as sharedTableFromMatrix,
+  uniqueHeaders,
+  type TabularOptions,
+} from "./tabularSource";
 
 /** The one-way channel a cloud reading reports its page progress on. */
 export const BANK_STATEMENT_PROGRESS_CHANNEL = "wheat:bank:statement:progress";
 
 const MAX_SOURCE_BYTES = 25_000_000;
 const MAX_ROWS = 2_000;
-const nodeRequire = createRequire(import.meta.url);
 
+/**
+ * How the shared tabular reader names this file, and how it refuses it.
+ *
+ * Encoding detection, separator detection, quoted fields and the XLSX sheet
+ * live in `tabularSource.ts`. What stays in this file is everything that knows
+ * a statement is a statement.
+ */
+const STATEMENT_SOURCE: TabularOptions = { noun: "Le relevé", maxRows: MAX_ROWS, fail: (message: string) => userError(message) };
 export type BankStatementFormat =
   | "CSV"
   | "TXT"
@@ -224,30 +239,12 @@ function safeSourceName(value: unknown): string {
   return path.basename(value.trim()).slice(0, 250);
 }
 
-function decodeText(bytes: Buffer): { text: string; encoding: "UTF-8" | "Windows-1252" } {
-  try {
-    return { text: new TextDecoder("utf-8", { fatal: true }).decode(bytes), encoding: "UTF-8" };
-  } catch {
-    return { text: new TextDecoder("windows-1252").decode(bytes), encoding: "Windows-1252" };
-  }
-}
-
 function normalizeHeader(value: string): string {
   return value
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "");
-}
-
-function uniqueHeaders(values: unknown[]): string[] {
-  const seen = new Map<string, number>();
-  return values.map((value, index) => {
-    const base = String(value ?? "").replace(/^\uFEFF/, "").trim() || `Column ${index + 1}`;
-    const count = (seen.get(base) ?? 0) + 1;
-    seen.set(base, count);
-    return count === 1 ? base : `${base} (${count})`;
-  });
 }
 
 export function suggestStatementMapping(headers: string[]): Partial<StatementColumnMapping> {
@@ -269,74 +266,12 @@ export function suggestStatementMapping(headers: string[]): Partial<StatementCol
   return { date, valueDate, label, reference, externalId, amount, debit, credit, currency };
 }
 
-function detectSeparator(line: string): string | null {
-  const candidates = [";", "\t", "|", ","];
-  let quoted = false;
-  const counts = new Map(candidates.map((candidate) => [candidate, 0]));
-  for (let index = 0; index < line.length; index += 1) {
-    const char = line[index];
-    if (char === '"') {
-      if (quoted && line[index + 1] === '"') index += 1;
-      else quoted = !quoted;
-    } else if (!quoted && counts.has(char)) counts.set(char, (counts.get(char) ?? 0) + 1);
-  }
-  const [separator, count] = [...counts].sort((left, right) => right[1] - left[1])[0] ?? ["", 0];
-  return count > 0 ? separator : null;
-}
-
-function parseDelimitedMatrix(text: string, separator: string): string[][] {
-  const matrix: string[][] = [];
-  let row: string[] = [];
-  let cell = "";
-  let quoted = false;
-  const finishCell = () => {
-    row.push(cell.trim());
-    cell = "";
-  };
-  const finishRow = () => {
-    finishCell();
-    if (row.some(Boolean)) matrix.push(row);
-    row = [];
-  };
-  for (let index = 0; index < text.length; index += 1) {
-    const char = text[index];
-    if (char === '"') {
-      if (quoted && text[index + 1] === '"') {
-        cell += '"';
-        index += 1;
-      } else quoted = !quoted;
-    } else if (!quoted && char === separator) finishCell();
-    else if (!quoted && (char === "\r" || char === "\n")) {
-      if (char === "\r" && text[index + 1] === "\n") index += 1;
-      finishRow();
-    } else cell += char;
-  }
-  if (cell || row.length) finishRow();
-  if (quoted) throw userError("Le fichier délimité contient un champ entre guillemets non fermé.");
-  return matrix;
-}
-
 function tableFromMatrix(matrix: string[][]): ParsedTable {
-  if (matrix.length < 2) throw userError("Le relevé ne contient pas d'en-tête et de ligne de données exploitables.");
-  const headers = uniqueHeaders(matrix[0]);
-  const warnings: string[] = [];
-  const rows: Array<Record<string, string>> = [];
-  for (let index = 1; index < matrix.length; index += 1) {
-    const values = matrix[index];
-    if (values.length !== headers.length) {
-      warnings.push(`Ligne source ${index + 1}: ${values.length} colonne(s) trouvée(s), ${headers.length} attendue(s).`);
-    }
-    rows.push(Object.fromEntries(headers.map((header, column) => [header, values[column] ?? ""])));
-  }
-  if (rows.length > MAX_ROWS) throw userError(`Le relevé contient plus de ${MAX_ROWS} lignes, limite sûre d'un import Wheat.`);
-  return { headers, rows, warnings };
+  return sharedTableFromMatrix(matrix, STATEMENT_SOURCE);
 }
 
 function parseDelimited(text: string): ParsedTable & { separator: string } {
-  const firstLine = text.split(/\r?\n/, 1)[0] ?? "";
-  const separator = detectSeparator(firstLine);
-  if (!separator) throw userError("Aucun séparateur de colonnes fiable n'a été détecté. Utilisez CSV, point-virgule, tabulation ou barre verticale.");
-  return { ...tableFromMatrix(parseDelimitedMatrix(text, separator)), separator };
+  return sharedParseDelimited(text, STATEMENT_SOURCE);
 }
 
 function xmlText(value: string): string {
@@ -1260,21 +1195,7 @@ export async function parseBankStatement(input: ParseBankStatementInput): Promis
     return finalize("XLS", "XlrdLegacyBankParser", await parseLegacyXls(bytes, input.app), ["Classeur XLS binaire lu par le convertisseur local épinglé xlrd 2.0.2."], null);
   }
   if (bytes.subarray(0, 2).toString("ascii") === "PK") {
-    const ExcelJS = nodeRequire("exceljs");
-    const workbook = new ExcelJS.Workbook();
-    try {
-      await workbook.xlsx.load(bytes as unknown as ArrayBuffer);
-    } catch {
-      throw userError("Le fichier ressemble à un XLSX mais le classeur est corrompu ou non pris en charge.");
-    }
-    const worksheet = workbook.worksheets[0];
-    if (!worksheet) throw userError("Le classeur XLSX ne contient aucune feuille.");
-    const matrix: string[][] = [];
-    worksheet.eachRow({ includeEmpty: false }, (row: any) => {
-      const width = Math.max(worksheet.columnCount, row.cellCount);
-      matrix.push(Array.from({ length: width }, (_, index) => row.getCell(index + 1).text.trim()));
-    });
-    return finalize("XLSX", "ExcelBankParser", tableFromMatrix(matrix), [], null);
+    return finalize("XLSX", "ExcelBankParser", tableFromMatrix(await readXlsxMatrix(bytes, STATEMENT_SOURCE)), [], null);
   }
   const { text, encoding } = decodeText(bytes);
   const trimmed = text.replace(/^\uFEFF/, "").trim();

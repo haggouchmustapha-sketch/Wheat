@@ -1,12 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
+  BarChart3,
   Boxes,
+  ClipboardCheck,
   FileSpreadsheet,
   Layers,
   Package,
   RefreshCw,
   Settings2,
+  TrendingDown,
+  Upload,
   Warehouse,
 } from "lucide-react";
 import {
@@ -19,6 +23,17 @@ import {
   Tabs,
   type TabItem,
 } from "./ui";
+import { Fact, TextField } from "./StockFields";
+import { downloadCsv, formatDate, formatQuantity, formatValue, messageOf } from "./stockFormat";
+import {
+  AccountPicker,
+  ImpairmentsPanel,
+  ImportPanel,
+  InventoryPanel,
+  ReportsPanel,
+  UnitConversionsCard,
+  WarehousesPanel,
+} from "./StockPanels";
 import "./StockWorkspace.css";
 
 /**
@@ -35,45 +50,6 @@ import "./StockWorkspace.css";
  * reintroduce, at the last possible moment, exactly the error the whole module
  * is built to avoid. `formatDecimal` therefore works on the text.
  */
-
-type Money = { raw: string; display: string } | null | undefined;
-
-/**
- * Formats an exact decimal string for a Moroccan French reader.
- *
- * Splits the string rather than converting it: trailing zeroes beyond the
- * meaningful decimals are dropped for quantities, thousands are grouped with a
- * narrow no-break space, and the value itself is never rounded by this function
- * — what it receives is what the register holds.
- */
-function formatDecimal(value: Money, options: { decimals?: number; trim?: boolean } = {}): string {
-  if (!value) return "—";
-  const text = value.display;
-  const negative = text.startsWith("-");
-  const [wholeRaw, fractionRaw = ""] = (negative ? text.slice(1) : text).split(".");
-  const decimals = options.decimals ?? 2;
-  let fraction = fractionRaw.slice(0, decimals).padEnd(decimals, "0");
-  if (options.trim) fraction = fraction.replace(/0+$/, "");
-  const whole = wholeRaw.replace(/\B(?=(\d{3})+(?!\d))/g, " ");
-  return `${negative ? "-" : ""}${whole}${fraction ? `,${fraction}` : ""}`;
-}
-
-const formatQuantity = (value: Money) => formatDecimal(value, { decimals: 6, trim: true });
-const formatValue = (value: Money) => formatDecimal(value, { decimals: 2 });
-
-function formatDate(value: string | null | undefined): string {
-  if (!value) return "—";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "—";
-  return date.toLocaleDateString("fr-MA", { day: "2-digit", month: "2-digit", year: "2-digit", timeZone: "UTC" });
-}
-
-function messageOf(error: unknown): string {
-  const text = error instanceof Error ? error.message : String(error ?? "");
-  // Electron prefixes an IPC rejection with the channel; the user needs the
-  // sentence the domain wrote, not the plumbing in front of it.
-  return text.replace(/^Error invoking remote method '[^']+':\s*/, "").replace(/^Error:\s*/, "").trim();
-}
 
 type StockWorkspaceProps = {
   companyId: string | null | undefined;
@@ -106,8 +82,13 @@ export default function StockWorkspace({ companyId, notify, openEntry }: StockWo
     { id: "card", label: "Fiche de stock", icon: <FileSpreadsheet size={15} /> },
     { id: "state", label: "État du stock", icon: <Layers size={15} /> },
     { id: "articles", label: "Articles", icon: <Package size={15} />, count: workspace?.articles?.length },
-    { id: "documents", label: "Documents", icon: <Boxes size={15} />, count: workspace?.overview?.draftDocuments },
-    { id: "settings", label: "Paramétrage comptable", icon: <Settings2 size={15} /> },
+    { id: "warehouses", label: "Dépôts", icon: <Warehouse size={15} />, count: workspace?.warehouses?.length },
+    { id: "documents", label: "Mouvements", icon: <Boxes size={15} />, count: workspace?.overview?.draftDocuments },
+    { id: "inventory", label: "Inventaire physique", icon: <ClipboardCheck size={15} /> },
+    { id: "impairments", label: "Dépréciations", icon: <TrendingDown size={15} /> },
+    { id: "imports", label: "Imports", icon: <Upload size={15} /> },
+    { id: "reports", label: "Rapports", icon: <BarChart3 size={15} /> },
+    { id: "settings", label: "Paramétrage", icon: <Settings2 size={15} /> },
   ], [workspace]);
 
   if (!companyId) {
@@ -151,7 +132,12 @@ export default function StockWorkspace({ companyId, notify, openEntry }: StockWo
       {tab === "card" && <StockCardPanel companyId={companyId} workspace={workspace} openEntry={openEntry} />}
       {tab === "state" && <StockStatePanel companyId={companyId} workspace={workspace} />}
       {tab === "articles" && <ArticlesPanel companyId={companyId} workspace={workspace} notify={notify} onSaved={load} />}
+      {tab === "warehouses" && <WarehousesPanel companyId={companyId} workspace={workspace} notify={notify} onChanged={load} />}
       {tab === "documents" && <DocumentsPanel companyId={companyId} notify={notify} onChanged={load} />}
+      {tab === "inventory" && <InventoryPanel companyId={companyId} workspace={workspace} notify={notify} onChanged={load} />}
+      {tab === "impairments" && <ImpairmentsPanel companyId={companyId} workspace={workspace} notify={notify} onChanged={load} openEntry={openEntry} />}
+      {tab === "imports" && <ImportPanel companyId={companyId} workspace={workspace} notify={notify} onChanged={load} />}
+      {tab === "reports" && <ReportsPanel companyId={companyId} workspace={workspace} openEntry={openEntry} />}
       {tab === "settings" && <SettingsPanel companyId={companyId} workspace={workspace} notify={notify} onSaved={load} />}
     </div>
   );
@@ -360,15 +346,6 @@ function StockCardPanel({ companyId, workspace, openEntry }: { companyId: string
   );
 }
 
-function Fact({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="stock-card__fact">
-      <dt>{label}</dt>
-      <dd>{value}</dd>
-    </div>
-  );
-}
-
 /** Where a movement's value came from, including the FIFO layers it consumed. */
 function MovementDetail({ detail, openEntry }: { detail: any; openEntry?: (entryId: string) => void }) {
   const { movement, document, fifo, landedCosts } = detail;
@@ -457,35 +434,25 @@ function MovementDetail({ detail, openEntry }: { detail: any; openEntry?: (entry
 /**
  * Exports the visible card.
  *
- * Writes the exact decimal the register holds rather than the grouped display
- * string, because a spreadsheet that receives "1 650,00" with a narrow space
- * reads it as text.
+ * The exact decimal the register holds, not the grouped display string: a
+ * spreadsheet that receives "1 650,00" with a space in it reads it as text.
  */
 function exportCardCsv(card: any) {
   if (!card) return;
-  const header = ["Date", "Désignation", "Stock init (1er achat)", "Achats", "Ventes", "Mouvement", "Stock en quant", "Stock en valeur"];
-  const rows = card.rows.map((row: any) => [
-    formatDate(row.date),
-    row.designation,
-    row.column === "OPENING" ? row.quantity.display : "",
-    row.column === "PURCHASE" ? row.quantity.display : "",
-    row.column === "SALE" ? row.quantity.display : "",
-    row.column === "OTHER" ? `${row.direction === "IN" ? "" : "-"}${row.quantity.display}` : "",
-    row.runningQuantity.display,
-    row.runningValue.display,
-  ]);
-  const escape = (value: string) => `"${String(value).replace(/"/g, '""')}"`;
-  const csv = [header, ...rows].map((line) => line.map(escape).join(";")).join("\r\n");
-  // Excel reads a CSV as the system codepage unless the file opens with a
-  // byte-order mark, which turns every accented designation into mojibake.
-  const byteOrderMark = String.fromCharCode(0xfeff);
-  const blob = new Blob([byteOrderMark + csv], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = `fiche-stock-${card.article.sku}.csv`;
-  anchor.click();
-  URL.revokeObjectURL(url);
+  downloadCsv(
+    `fiche-stock-${card.article.sku}.csv`,
+    ["Date", "Désignation", "Stock init (1er achat)", "Achats", "Ventes", "Mouvement", "Stock en quant", "Stock en valeur"],
+    card.rows.map((row: any) => [
+      formatDate(row.date),
+      row.designation,
+      row.column === "OPENING" ? row.quantity.display : "",
+      row.column === "PURCHASE" ? row.quantity.display : "",
+      row.column === "SALE" ? row.quantity.display : "",
+      row.column === "OTHER" ? `${row.direction === "IN" ? "" : "-"}${row.quantity.display}` : "",
+      row.runningQuantity.display,
+      row.runningValue.display,
+    ]),
+  );
 }
 
 /* ------------------------------------------------------------- stock state */
@@ -694,16 +661,6 @@ function ArticlesPanel({ companyId, workspace, notify, onSaved }: { companyId: s
   );
 }
 
-function TextField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
-  const id = `field-${label.replace(/\W+/g, "-").toLowerCase()}`;
-  return (
-    <div className="stock-filters__field">
-      <label htmlFor={id}>{label}</label>
-      <input id={id} value={value} onChange={(event) => onChange(event.target.value)} />
-    </div>
-  );
-}
-
 /* --------------------------------------------------------------- documents */
 
 function DocumentsPanel({ companyId, notify, onChanged }: { companyId: string; notify?: StockWorkspaceProps["notify"]; onChanged: () => void }) {
@@ -801,6 +758,9 @@ function DocumentsPanel({ companyId, notify, onChanged }: { companyId: string; n
 function SettingsPanel({ companyId, workspace, notify, onSaved }: { companyId: string; workspace: any; notify?: StockWorkspaceProps["notify"]; onSaved: () => void }) {
   const [journalId, setJournalId] = useState(workspace.settings.stockJournalId ?? "");
   const [allowNegative, setAllowNegative] = useState(Boolean(workspace.settings.allowNegativeStock));
+  const [impairmentAccountId, setImpairmentAccountId] = useState(workspace.settings.impairmentAccountId ?? "");
+  const [impairmentChargeAccountId, setImpairmentChargeAccountId] = useState(workspace.settings.impairmentChargeAccountId ?? "");
+  const [impairmentReversalAccountId, setImpairmentReversalAccountId] = useState(workspace.settings.impairmentReversalAccountId ?? "");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -808,7 +768,14 @@ function SettingsPanel({ companyId, workspace, notify, onSaved }: { companyId: s
     setSaving(true);
     setError(null);
     try {
-      await window.wheat!.saveStockSettings({ companyId, stockJournalId: journalId || null, allowNegativeStock: allowNegative });
+      await window.wheat!.saveStockSettings({
+        companyId,
+        stockJournalId: journalId || null,
+        allowNegativeStock: allowNegative,
+        impairmentAccountId: impairmentAccountId || null,
+        impairmentChargeAccountId: impairmentChargeAccountId || null,
+        impairmentReversalAccountId: impairmentReversalAccountId || null,
+      });
       notify?.("Paramétrage du stock enregistré.", "success");
       onSaved();
     } catch (caught) {
@@ -844,10 +811,43 @@ function SettingsPanel({ companyId, workspace, notify, onSaved }: { companyId: s
           La méthode FIFO refuse toujours le stock négatif : il n'existe aucune couche d'acquisition à consommer,
           et Wheat n'invente pas un coût.
         </p>
+
+        <h4 className="stock-section-title">Comptes de dépréciation</h4>
+        <div className="stock-filters">
+          <AccountPicker
+            label="Compte de provision"
+            accounts={workspace.accounts}
+            value={impairmentAccountId}
+            onChange={setImpairmentAccountId}
+          />
+          <AccountPicker
+            label="Compte de dotation"
+            accounts={workspace.accounts}
+            value={impairmentChargeAccountId}
+            onChange={setImpairmentChargeAccountId}
+          />
+          <AccountPicker
+            label="Compte de reprise"
+            accounts={workspace.accounts}
+            value={impairmentReversalAccountId}
+            onChange={setImpairmentReversalAccountId}
+          />
+        </div>
+        <p className="stock-note">
+          Une dépréciation n'existe que dans les comptes. Tant que ces trois comptes ne sont pas choisis, Wheat refuse
+          d'en enregistrer une plutôt que d'en deviner un. Les codes CGNC souvent utilisés
+          {" "}({workspace.impairmentSuggestions?.provision} provision, {workspace.impairmentSuggestions?.charge} dotation,
+          {" "}{workspace.impairmentSuggestions?.reversal} reprise) sont des <strong>suggestions à faire vérifier par
+          votre comptable</strong>, pas une recommandation de Wheat : elles dépendent du plan du dossier et de la
+          méthode d'inventaire qu'il applique.
+        </p>
+
         <div className="stock-actions">
           <Button onClick={() => void save()} disabled={saving}>Enregistrer</Button>
         </div>
       </Card>
+
+      <UnitConversionsCard companyId={companyId} workspace={workspace} notify={notify} onSaved={onSaved} />
 
       <Card
         title="Comptes de stock"

@@ -200,9 +200,24 @@ test("the stock card shows the acceptance scenario in the specified columns", as
     await page.getByRole("tab", { name: /État du stock/ }).click();
     await expect(page.locator(".stock-table tfoot")).toContainText(grouped("1 650,00"));
 
-    // And the documents list offers the correction path rather than an edit.
-    await page.getByRole("tab", { name: /Documents/ }).click();
+    // And the movements list offers the correction path rather than an edit.
+    await page.getByRole("tab", { name: /Mouvements/ }).click();
     await expect(page.getByRole("button", { name: "Contrepasser" }).first()).toBeVisible();
+
+    // The workflows added after the core are reachable from the same workspace
+    // and render against the same dossier — not a second interface beside it.
+    await page.getByRole("tab", { name: /Inventaire physique/ }).click();
+    await expect(page.getByRole("button", { name: "Nouvelle campagne" })).toBeVisible();
+
+    await page.getByRole("tab", { name: /Dépréciations/ }).click();
+    await expect(page.getByRole("button", { name: /Constater une dépréciation/ })).toBeVisible();
+
+    await page.getByRole("tab", { name: /Imports/ }).click();
+    await expect(page.getByRole("button", { name: "Prévisualiser" })).toBeVisible();
+
+    // The valuation report reaches the same position the card just showed.
+    await page.getByRole("tab", { name: /Rapports/ }).click();
+    await expect(page.locator(".stock-table tfoot")).toContainText(grouped("1 650,00"));
 
     expect(rendererErrors).toEqual([]);
   } finally {

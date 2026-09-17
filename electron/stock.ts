@@ -32,7 +32,44 @@ import {
   requireStockQuantity,
   stockCardColumn,
 } from "./stockDomain";
-import { derivedUnitCost, moneyFromDecimal, moneyToDisplay, qtyToDisplay } from "./stockUnits";
+import {
+  createImpairmentInTransaction,
+  impairedPositionAt,
+  reverseImpairmentInTransaction,
+} from "./stockImpairment";
+import {
+  STOCK_IMPORT_CONFLICT_MODES,
+  STOCK_IMPORT_FIELDS,
+  STOCK_IMPORT_KINDS,
+  commitImportInTransaction,
+  planImport,
+  type ImportContext,
+  type StockImportConflictMode,
+  type StockImportKind,
+} from "./stockImport";
+import {
+  STOCK_CAMPAIGN_STATUS,
+  createCampaignInTransaction,
+  freezeCampaignInTransaction,
+  saveCountsInTransaction,
+  setCampaignStatusInTransaction,
+  validateCampaignInTransaction,
+} from "./stockInventory";
+import {
+  inventoryVarianceReport,
+  stockAgeingReport,
+  stockAnomalyReport,
+  stockMovementReport,
+  stockValuationReport,
+} from "./stockReports";
+import { derivedUnitCost, moneyFromDecimal, moneyToDisplay, qtyFromDecimal, qtyToDisplay } from "./stockUnits";
+import {
+  IDENTITY_FACTOR,
+  assertConversionIsConsistent,
+  convertQuantity,
+  requireConversionFactor,
+  resolveUnitFactor,
+} from "./stockUnitConversion";
 import { VALUATION_METHODS, isValuationMethod } from "./stockValuation";
 import { reverseStockDocumentInTransaction, validateStockDocumentInTransaction } from "./stockValidation";
 
@@ -124,6 +161,85 @@ async function ensureSettings(prisma: PrismaLike, companyId: string) {
   return prisma.stockSettings.create({ data: { companyId } });
 }
 
+/** The spreadsheet itself, as bytes, transported as base64 like every other file. */
+function importBytes(payload: Record<string, any>): Buffer {
+  const encoded = payload.bytesBase64;
+  if (typeof encoded !== "string" || !encoded) throw new StockError("Le fichier à importer est vide.");
+  const bytes = Buffer.from(encoded, "base64");
+  if (!bytes.length) throw new StockError("Le fichier à importer est vide.");
+  if (bytes.length > 25 * 1024 * 1024) throw new StockError("Le fichier à importer dépasse 25 Mo.");
+  return bytes;
+}
+
+/** Only the columns the person actually associated, as plain strings. */
+function importMapping(value: unknown): Record<string, string> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const mapping: Record<string, string> = {};
+  for (const [key, header] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof header === "string" && header.trim()) mapping[key] = header;
+  }
+  return Object.keys(mapping).length > 0 ? mapping : null;
+}
+
+/**
+ * The choices that govern an import, validated against the dossier.
+ *
+ * The default unit and dépôt are resolved here rather than in the planner, so
+ * that a forged id fails the membership check before a single row is read.
+ */
+async function importContext(prisma: PrismaLike, companyId: string, payload: Record<string, any>): Promise<ImportContext> {
+  const kind = String(payload.kind ?? "ARTICLES") as StockImportKind;
+  if (!(STOCK_IMPORT_KINDS as readonly string[]).includes(kind)) throw new StockError("Le type d'import est invalide.");
+  const conflictMode = String(payload.conflictMode ?? "REFUSE") as StockImportConflictMode;
+  if (!(STOCK_IMPORT_CONFLICT_MODES as readonly string[]).includes(conflictMode)) {
+    throw new StockError("Le traitement des doublons est invalide.");
+  }
+
+  const defaultUnitId = requireId(payload.defaultUnitId, "L'unité par défaut");
+  const unit = await prisma.stockUnit.findFirst({ where: { id: defaultUnitId, companyId } });
+  if (!unit) throw new StockError("Cette unité n'appartient pas à ce dossier.");
+
+  const defaultWarehouseId = optionalText(payload.defaultWarehouseId, 200);
+  if (defaultWarehouseId) {
+    const warehouse = await prisma.stockWarehouse.findFirst({ where: { id: defaultWarehouseId, companyId } });
+    if (!warehouse) throw new StockError("Ce dépôt n'appartient pas à ce dossier.");
+  }
+  const defaultValuationMethod = String(payload.defaultValuationMethod ?? "CMP").toUpperCase();
+  if (!isValuationMethod(defaultValuationMethod)) throw new StockError("La méthode de valorisation par défaut est invalide.");
+
+  return {
+    companyId,
+    kind,
+    conflictMode,
+    defaultUnitId,
+    defaultWarehouseId,
+    defaultValuationMethod,
+    documentDate: payload.documentDate ? parseAccountingDate(payload.documentDate, "La date du stock initial") : null,
+  };
+}
+
+/**
+ * A resolver from "the unit this line was entered in" to "1 of it, in the
+ * article's own unit".
+ *
+ * Built once per save so a document of forty lines reads the conversion table
+ * once, and so every line of that document resolves against the same graph —
+ * a resolver rebuilt per line could straddle a concurrent edit and give two
+ * lines of one document two different factors for the same pair of units.
+ */
+async function unitResolver(prisma: PrismaLike, companyId: string) {
+  const [conversions, units] = await Promise.all([
+    prisma.stockUnitConversion.findMany({ where: { companyId, active: true } }),
+    prisma.stockUnit.findMany({ where: { companyId }, select: { id: true, code: true, label: true } }),
+  ]);
+  const edges = conversions.map((row: any) => ({ fromUnitId: row.fromUnitId, toUnitId: row.toUnitId, factor: row.factor }));
+  const nameOf = new Map<string, string>(units.map((unit: any) => [unit.id, unit.label || unit.code]));
+  const describe = (unitId: string) => nameOf.get(unitId) ?? unitId;
+  return (unitId: string, article: { unitId: string }) => (
+    unitId === article.unitId ? IDENTITY_FACTOR : resolveUnitFactor(edges, unitId, article.unitId, describe)
+  );
+}
+
 export function createStockService(options: StockServiceOptions) {
   const serialize = options.serialize ?? (<T>(value: T) => value);
   const actor = async () => (await options.getActorUserId?.()) ?? null;
@@ -141,7 +257,7 @@ export function createStockService(options: StockServiceOptions) {
       const { prisma, companyId, role } = await context(payload.companyId, "view");
       const settings = await ensureSettings(prisma, companyId);
 
-      const [articles, families, units, warehouses, balances, drafts, mappings, journals] = await Promise.all([
+      const [articles, families, units, conversions, warehouses, balances, drafts, mappings, journals, accounts] = await Promise.all([
         prisma.stockArticle.findMany({
           where: { companyId },
           orderBy: { designation: "asc" },
@@ -149,6 +265,11 @@ export function createStockService(options: StockServiceOptions) {
         }),
         prisma.stockArticleFamily.findMany({ where: { companyId }, orderBy: { code: "asc" } }),
         prisma.stockUnit.findMany({ where: { companyId }, orderBy: { code: "asc" } }),
+        prisma.stockUnitConversion.findMany({
+          where: { companyId },
+          orderBy: { createdAt: "asc" },
+          include: { fromUnit: { select: { id: true, code: true, label: true } }, toUnit: { select: { id: true, code: true, label: true } } },
+        }),
         prisma.stockWarehouse.findMany({ where: { companyId }, orderBy: { code: "asc" }, include: { locations: { orderBy: { code: "asc" } } } }),
         prisma.stockBalance.findMany({ where: { companyId }, include: { article: { select: { id: true, sku: true, designation: true, minQuantity: true } } } }),
         prisma.stockDocument.count({ where: { companyId, status: STOCK_DOCUMENT_STATUS.draft } }),
@@ -162,6 +283,9 @@ export function createStockService(options: StockServiceOptions) {
           },
         }),
         prisma.journal.findMany({ where: { companyId, active: true }, orderBy: { code: "asc" }, select: { id: true, code: true, label: true } }),
+        // The chart, for the account pickers. Codes and labels only: the
+        // configuration screen chooses between accounts, it does not read them.
+        prisma.account.findMany({ where: { companyId, active: true }, orderBy: { code: "asc" }, select: { id: true, code: true, label: true } }),
       ]);
 
       const totalValue = balances.reduce((sum: bigint, balance: any) => sum + balance.value, 0n);
@@ -208,8 +332,16 @@ export function createStockService(options: StockServiceOptions) {
         })),
         families,
         units,
+        conversions: conversions.map((conversion: any) => ({
+          id: conversion.id,
+          fromUnit: conversion.fromUnit,
+          toUnit: conversion.toUnit,
+          active: conversion.active,
+          factor: quantity(conversion.factor),
+        })),
         warehouses,
         journals,
+        accounts,
         mappings,
         valuationMethods: VALUATION_METHODS,
         documentTypes: STOCK_DOCUMENT_TYPE_IDS.map((id) => ({ id, ...STOCK_DOCUMENT_TYPES[id] })),
@@ -501,6 +633,8 @@ export function createStockService(options: StockServiceOptions) {
         lines: document.lines.map((line: any) => ({
           ...line,
           quantity: quantity(line.quantity),
+          baseQuantity: quantity(line.baseQuantity),
+          unitFactor: quantity(line.unitFactor),
           unitValue: line.unitValue === null ? null : amount(line.unitValue),
           grossValue: amount(line.grossValue),
           allocatedChargeValue: amount(line.allocatedChargeValue),
@@ -547,15 +681,25 @@ export function createStockService(options: StockServiceOptions) {
       const articles = await prisma.stockArticle.findMany({ where: { id: { in: articleIds }, companyId } });
       if (articles.length !== articleIds.length) throw new StockError("Une ligne référence un article d'un autre dossier.");
       const articleById = new Map<string, any>(articles.map((article: any) => [article.id, article]));
+      const resolveLineUnit = await unitResolver(prisma, companyId);
 
       const lines = rawLines.map((rawLine: any, index: number) => {
         const line = record(rawLine, `La ligne ${index + 1}`);
         const article = articleById.get(String(line.articleId));
+        const quantity = requireStockQuantity(line.quantity, `La quantité de la ligne ${index + 1}`);
+        // The line keeps what was entered; the register gets the same goods in
+        // the article's own unit, through the factor in force right now — which
+        // is stored beside it so a later change to that factor cannot reprice a
+        // movement this line is about to produce.
+        const unitId = optionalText(line.unitId, 200) ?? article.unitId;
+        const unitFactor = resolveLineUnit(unitId, article);
         return {
           position: index + 1,
           articleId: article.id,
-          quantity: requireStockQuantity(line.quantity, `La quantité de la ligne ${index + 1}`),
-          unitId: optionalText(line.unitId, 200) ?? article.unitId,
+          quantity,
+          unitId,
+          unitFactor,
+          baseQuantity: convertQuantity(quantity, unitFactor, `La quantité de la ligne ${index + 1}`),
           warehouseId: optionalText(line.warehouseId, 200) ?? warehouseId,
           locationId: optionalText(line.locationId, 200),
           lotId: optionalText(line.lotId, 200),
@@ -702,7 +846,10 @@ export function createStockService(options: StockServiceOptions) {
         targetWarehouse: document.targetWarehouse,
         lines: document.lines.map((line: any) => ({
           article: line.article,
-          quantity: quantity(outbound ? -line.quantity : line.quantity),
+          // What the register will move, in the article's own unit — the line
+          // may have been entered in cartons, and the position is not kept in
+          // cartons.
+          quantity: quantity(outbound ? -line.baseQuantity : line.baseQuantity),
         })),
         landedCostTotal: amount(document.landedCosts.reduce((sum: bigint, charge: any) => sum + charge.amount, 0n)),
         warning: "La validation écrit des mouvements immuables et un brouillon comptable lié ; toute correction ultérieure exigera une contrepassation.",
@@ -885,6 +1032,82 @@ export function createStockService(options: StockServiceOptions) {
       }
     },
 
+    /**
+     * Records `1 fromUnit = factor toUnit` for this dossier.
+     *
+     * Refused when it contradicts what the existing conversions already imply,
+     * because a graph that answers "how many unités in a palette" with two
+     * different numbers depending on the route is a graph no quantity can be
+     * trusted to. The row being edited is excluded from that comparison, so
+     * re-saving a conversion unchanged is not refused for contradicting itself.
+     */
+    async saveUnitConversion(payloadValue: unknown) {
+      const payload = record(payloadValue, "La conversion d'unités");
+      const { prisma, companyId, actorUserId } = await context(payload.companyId, "manageCatalogue");
+      const id = optionalText(payload.id, 200);
+      const fromUnitId = requireId(payload.fromUnitId, "L'unité de départ");
+      const toUnitId = requireId(payload.toUnitId, "L'unité d'arrivée");
+      const factor = requireConversionFactor(
+        requireStockQuantity(payload.factor, "Le facteur de conversion"),
+        "Le facteur de conversion",
+      );
+
+      const units = await prisma.stockUnit.findMany({ where: { companyId, id: { in: [fromUnitId, toUnitId] } } });
+      if (units.length !== new Set([fromUnitId, toUnitId]).size) {
+        throw new StockError("Une de ces unités n'appartient pas à ce dossier.");
+      }
+      const existing = await prisma.stockUnitConversion.findMany({
+        where: { companyId, active: true, ...(id ? { NOT: { id } } : {}) },
+        include: { fromUnit: { select: { code: true, label: true } }, toUnit: { select: { code: true, label: true } } },
+      });
+      const nameOf = new Map<string, string>();
+      for (const unit of units) nameOf.set(unit.id, unit.label || unit.code);
+      for (const row of existing) {
+        nameOf.set(row.fromUnitId, row.fromUnit.label || row.fromUnit.code);
+        nameOf.set(row.toUnitId, row.toUnit.label || row.toUnit.code);
+      }
+      assertConversionIsConsistent(
+        existing.map((row: any) => ({ fromUnitId: row.fromUnitId, toUnitId: row.toUnitId, factor: row.factor })),
+        { fromUnitId, toUnitId, factor },
+        (unitId) => nameOf.get(unitId) ?? unitId,
+      );
+
+      const data = { companyId, fromUnitId, toUnitId, factor, active: payload.active === undefined ? true : Boolean(payload.active) };
+      return prisma.$transaction(async (tx: any) => {
+        const saved = id
+          ? await tx.stockUnitConversion.update({ where: { id }, data: { ...data, version: { increment: 1 } } })
+          : await tx.stockUnitConversion.upsert({
+            where: { companyId_fromUnitId_toUnitId: { companyId, fromUnitId, toUnitId } },
+            create: data,
+            update: { factor, active: data.active, version: { increment: 1 } },
+          });
+        await appendActivityAndAudit(tx, {
+          companyId, actorUserId, action: "STOCK_UNIT_CONVERSION_SAVED", entityType: "StockUnitConversion", entityId: saved.id,
+          description: `Conversion d'unités enregistrée (facteur ${qtyToDisplay(factor)})`,
+          payload: { fromUnitId, toUnitId, factor: factor.toString() },
+        });
+        return serialize(saved);
+      });
+    },
+
+    /**
+     * Retires a conversion.
+     *
+     * Deactivated rather than deleted: every document line already written
+     * carries the factor it used, so removing the row changes nothing about
+     * history — but keeping it means the dossier can still read why a line from
+     * last year resolved the way it did.
+     */
+    async deleteUnitConversion(payloadValue: unknown) {
+      const payload = record(payloadValue, "La conversion d'unités");
+      const { prisma, companyId } = await context(payload.companyId, "manageCatalogue");
+      const id = requireId(payload.id, "La conversion");
+      const conversion = await prisma.stockUnitConversion.findFirst({ where: { id, companyId } });
+      if (!conversion) throw new StockError("Cette conversion n'existe plus ou n'appartient pas à ce dossier.");
+      await prisma.stockUnitConversion.update({ where: { id }, data: { active: false, version: { increment: 1 } } });
+      return serialize({ ok: true, id });
+    },
+
     async listLots(payloadValue: unknown) {
       const payload = record(payloadValue, "La liste des lots");
       const { prisma, companyId } = await context(payload.companyId, "view");
@@ -895,6 +1118,391 @@ export function createStockService(options: StockServiceOptions) {
         include: { article: { select: { id: true, sku: true, designation: true } } },
       });
       return serialize(lots);
+    },
+
+    /* ------------------------------------------------- inventaire physique */
+
+    async listCampaigns(payloadValue: unknown) {
+      const payload = record(payloadValue, "Les campagnes d'inventaire");
+      const { prisma, companyId } = await context(payload.companyId, "view");
+      const campaigns = await prisma.stockInventoryCampaign.findMany({
+        where: { companyId },
+        orderBy: [{ countDate: "desc" }, { createdAt: "desc" }],
+        take: 200,
+        include: {
+          warehouse: { select: { id: true, code: true, name: true } },
+          documents: { select: { id: true, reference: true, type: true, status: true, accountingEntryId: true } },
+          _count: { select: { counts: true } },
+        },
+      });
+      return serialize(campaigns);
+    },
+
+    /** The counting sheet: every frozen position with its écart, live. */
+    async getCampaign(payloadValue: unknown) {
+      const payload = record(payloadValue, "La campagne d'inventaire");
+      const { prisma, companyId } = await context(payload.companyId, "view");
+      const campaignId = requireId(payload.campaignId, "La campagne");
+      const report = await inventoryVarianceReport(prisma, { companyId, campaignId });
+      if (!report) throw new StockError("Cette campagne n'existe plus ou n'appartient pas à ce dossier.");
+      return serialize({
+        campaign: report.campaign,
+        rows: report.rows.map((row: any) => ({
+          id: row.count.id,
+          article: row.count.article,
+          warehouse: row.count.warehouse,
+          lot: row.count.lot,
+          expectedQuantity: quantity(row.expectedQuantity),
+          expectedValue: amount(row.expectedValue),
+          countedQuantity: row.countedQuantity === null ? null : quantity(row.countedQuantity),
+          countedAt: row.count.countedAt,
+          unitValue: row.count.unitValue === null ? null : amount(row.count.unitValue),
+          varianceQuantity: quantity(row.varianceQuantity),
+          varianceValue: row.varianceValue === null ? null : amount(row.varianceValue),
+          note: row.count.note,
+        })),
+        summary: {
+          ...report.summary,
+          expectedValue: amount(report.summary.expectedValue),
+          varianceValue: amount(report.summary.varianceValue),
+        },
+        statuses: STOCK_CAMPAIGN_STATUS,
+      });
+    },
+
+    async createCampaign(payloadValue: unknown) {
+      const payload = record(payloadValue, "La campagne d'inventaire");
+      const { prisma, companyId, actorUserId } = await context(payload.companyId, "performInventory");
+      const countDate = parseAccountingDate(payload.countDate, "La date d'inventaire");
+      const warehouseId = optionalText(payload.warehouseId, 200);
+      const created = await prisma.$transaction(async (tx: any) => createCampaignInTransaction(tx, {
+        companyId, warehouseId, countDate, note: optionalText(payload.note, 500), actorUserId,
+      }));
+      return serialize(created);
+    },
+
+    /** Freezes the theoretical position, or refreshes it keeping the counts. */
+    async freezeCampaign(payloadValue: unknown) {
+      const payload = record(payloadValue, "Le gel de l'inventaire");
+      const { prisma, companyId, actorUserId } = await context(payload.companyId, "performInventory");
+      const campaignId = requireId(payload.campaignId, "La campagne");
+      const result = await prisma.$transaction(async (tx: any) => freezeCampaignInTransaction(tx, {
+        companyId, campaignId, actorUserId,
+      }));
+      return serialize(result);
+    },
+
+    async saveCampaignCounts(payloadValue: unknown) {
+      const payload = record(payloadValue, "Les quantités comptées");
+      const { prisma, companyId, actorUserId } = await context(payload.companyId, "performInventory");
+      const campaignId = requireId(payload.campaignId, "La campagne");
+      const rawEntries = Array.isArray(payload.entries) ? payload.entries : [];
+      if (rawEntries.length === 0) throw new StockError("Aucune quantité comptée n'a été transmise.");
+      const entries = rawEntries.map((rawEntry: any, index: number) => {
+        const entry = record(rawEntry, `La ligne comptée ${index + 1}`);
+        const counted = entry.countedQuantity;
+        return {
+          articleId: requireId(entry.articleId, `L'article de la ligne ${index + 1}`),
+          warehouseId: requireId(entry.warehouseId, `Le dépôt de la ligne ${index + 1}`),
+          lotId: optionalText(entry.lotId, 200),
+          // Null is "not counted"; zero is "counted, and there were none".
+          countedQuantity: counted === null || counted === undefined || counted === ""
+            ? null
+            : qtyFromDecimal(counted, `La quantité comptée de la ligne ${index + 1}`),
+          unitValue: entry.unitValue === null || entry.unitValue === undefined || entry.unitValue === ""
+            ? null
+            : moneyFromDecimal(entry.unitValue, `La valeur unitaire de la ligne ${index + 1}`),
+          note: optionalText(entry.note, 500),
+        };
+      });
+      const result = await prisma.$transaction(async (tx: any) => saveCountsInTransaction(tx, {
+        companyId, campaignId, entries, actorUserId,
+      }));
+      return serialize(result);
+    },
+
+    async setCampaignStatus(payloadValue: unknown) {
+      const payload = record(payloadValue, "L'état de la campagne");
+      const { prisma, companyId, actorUserId } = await context(payload.companyId, "performInventory");
+      const campaignId = requireId(payload.campaignId, "La campagne");
+      const status = requireText(payload.status, "L'état de la campagne", 40).toUpperCase();
+      const result = await prisma.$transaction(async (tx: any) => setCampaignStatusInTransaction(tx, {
+        companyId, campaignId, status, actorUserId,
+      }));
+      return serialize(result);
+    },
+
+    async validateCampaign(payloadValue: unknown) {
+      const payload = record(payloadValue, "La validation de l'inventaire");
+      const { prisma, companyId, actorUserId } = await context(payload.companyId, "performInventory");
+      const campaignId = requireId(payload.campaignId, "La campagne");
+      const expectedVersion = payload.expectedVersion === undefined ? undefined : Number(payload.expectedVersion);
+      const result = await prisma.$transaction(async (tx: any) => validateCampaignInTransaction(tx, {
+        companyId, campaignId, actorUserId, expectedVersion,
+      }));
+      return serialize(result);
+    },
+
+    /* ------------------------------------------------------- dépréciations */
+
+    async listImpairments(payloadValue: unknown) {
+      const payload = record(payloadValue, "Les dépréciations");
+      const { prisma, companyId } = await context(payload.companyId, "view");
+      const impairments = await prisma.stockImpairment.findMany({
+        where: { companyId },
+        orderBy: [{ impairmentDate: "desc" }, { createdAt: "desc" }],
+        take: 300,
+        include: {
+          article: { select: { id: true, sku: true, designation: true } },
+          warehouse: { select: { id: true, code: true, name: true } },
+          accountingEntry: { select: { id: true, number: true, pieceNumber: true, status: true } },
+          supportingDocument: { select: { id: true, title: true, type: true } },
+          reversalOf: { select: { id: true, reference: true } },
+        },
+      });
+      return serialize(impairments.map((impairment: any) => ({
+        ...impairment,
+        quantity: quantity(impairment.quantity),
+        valueBefore: amount(impairment.valueBefore),
+        recoverableValue: amount(impairment.recoverableValue),
+        amount: amount(impairment.amount),
+      })));
+    },
+
+    /**
+     * What a dépréciation would be worth, before one is recorded.
+     *
+     * Read-only, and the only way the screen can offer a recoverable value
+     * against a real carrying value rather than against a number the user had to
+     * look up for themselves.
+     */
+    async previewImpairment(payloadValue: unknown) {
+      const payload = record(payloadValue, "La dépréciation");
+      const { prisma, companyId } = await context(payload.companyId, "viewValuation");
+      const articleId = requireId(payload.articleId, "L'article");
+      const warehouseId = optionalText(payload.warehouseId, 200);
+      const date = parseAccountingDate(payload.impairmentDate, "La date de la dépréciation");
+      const position = await impairedPositionAt(prisma, companyId, articleId, warehouseId, date);
+      const active = await prisma.stockImpairment.findFirst({
+        where: { companyId, articleId, warehouseId, status: "ACTIVE" },
+        select: { id: true, reference: true, amount: true, impairmentDate: true },
+      });
+      return serialize({
+        quantity: quantity(position.quantity),
+        value: amount(position.value),
+        unitCost: unitCostOf(position.value, position.quantity),
+        activeImpairment: active ? { ...active, amount: amount(active.amount) } : null,
+      });
+    },
+
+    async saveImpairment(payloadValue: unknown) {
+      const payload = record(payloadValue, "La dépréciation");
+      const { prisma, companyId, actorUserId } = await context(payload.companyId, "createDocuments");
+      const created = await prisma.$transaction(async (tx: any) => createImpairmentInTransaction(tx, {
+        companyId,
+        articleId: requireId(payload.articleId, "L'article"),
+        warehouseId: optionalText(payload.warehouseId, 200),
+        impairmentDate: parseAccountingDate(payload.impairmentDate, "La date de la dépréciation"),
+        recoverableValue: moneyFromDecimal(payload.recoverableValue, "La valeur recouvrable"),
+        reason: requireText(payload.reason, "Le motif de la dépréciation", 500),
+        note: optionalText(payload.note, 2000),
+        supportingDocumentId: optionalText(payload.supportingDocumentId, 200),
+        actorUserId,
+      }));
+      return serialize({
+        ...created,
+        quantity: quantity(created.quantity),
+        valueBefore: amount(created.valueBefore),
+        recoverableValue: amount(created.recoverableValue),
+        amount: amount(created.amount),
+      });
+    },
+
+    async reverseImpairment(payloadValue: unknown) {
+      const payload = record(payloadValue, "La reprise de dépréciation");
+      const { prisma, companyId, actorUserId } = await context(payload.companyId, "createDocuments");
+      const impairmentId = requireId(payload.impairmentId, "La dépréciation");
+      const result = await prisma.$transaction(async (tx: any) => reverseImpairmentInTransaction(tx, {
+        companyId,
+        impairmentId,
+        date: payload.date ? parseAccountingDate(payload.date, "La date de la reprise") : null,
+        reason: optionalText(payload.reason, 500),
+        actorUserId,
+      }));
+      return serialize({ ...result, amount: amount(result.amount) });
+    },
+
+    /* -------------------------------------------------------------- import */
+
+    /** Reads the file and says what would happen. Writes nothing. */
+    async previewImport(payloadValue: unknown) {
+      const payload = record(payloadValue, "L'import de stock");
+      const { prisma, companyId } = await context(payload.companyId, "importData");
+      const plan = await planImport(prisma, {
+        context: await importContext(prisma, companyId, payload),
+        bytes: importBytes(payload),
+        fileName: requireText(payload.fileName, "Le nom du fichier", 250),
+        mapping: importMapping(payload.mapping),
+      });
+      return serialize({
+        ...plan,
+        articles: plan.articles.map((article) => ({ ...article, minQuantity: quantity(article.minQuantity) })),
+        openings: plan.openings.map((opening) => ({
+          ...opening,
+          quantity: quantity(opening.quantity),
+          unitValue: amount(opening.unitValue),
+          value: amount(opening.value),
+        })),
+        fields: STOCK_IMPORT_FIELDS[plan.kind],
+        conflictModes: STOCK_IMPORT_CONFLICT_MODES,
+      });
+    },
+
+    /**
+     * Re-reads the same file, re-plans it, and writes it — or nothing.
+     *
+     * The bytes are sent again rather than the plan being trusted: the preview
+     * crossed to the renderer and back, and what is written has to be what the
+     * file says, checked against the catalogue as it stands now.
+     */
+    async confirmImport(payloadValue: unknown) {
+      const payload = record(payloadValue, "L'import de stock");
+      const { prisma, companyId, actorUserId } = await context(payload.companyId, "importData");
+      const importing = await importContext(prisma, companyId, payload);
+      const bytes = importBytes(payload);
+      const fileName = requireText(payload.fileName, "Le nom du fichier", 250);
+      const mapping = importMapping(payload.mapping);
+      const plan = await planImport(prisma, { context: importing, bytes, fileName, mapping });
+      if (plan.errors.length > 0) {
+        throw new StockError(
+          `Cet import comporte ${plan.errors.length} erreur(s) et n'a rien écrit :\n`
+          + plan.errors.slice(0, 10).map((issue) => `Ligne ${issue.row} : ${issue.message}`).join("\n"),
+        );
+      }
+      const result = await prisma.$transaction(async (tx: any) => commitImportInTransaction(tx, {
+        context: importing, plan, actorUserId,
+      }));
+      return serialize(result);
+    },
+
+    /* ------------------------------------------------------------- rapports */
+
+    async getValuationReport(payloadValue: unknown) {
+      const payload = record(payloadValue, "Le rapport de valorisation");
+      const { prisma, companyId } = await context(payload.companyId, "viewValuation");
+      const groupBy = ["ARTICLE", "WAREHOUSE", "FAMILY", "METHOD"].includes(String(payload.groupBy))
+        ? String(payload.groupBy) as "ARTICLE" | "WAREHOUSE" | "FAMILY" | "METHOD"
+        : "ARTICLE";
+      const report = await stockValuationReport(prisma, {
+        companyId,
+        asOf: payload.asOf ? parseAccountingDate(payload.asOf, "La date d'arrêté") : new Date(),
+        warehouseId: optionalText(payload.warehouseId, 200),
+        articleId: optionalText(payload.articleId, 200),
+        familyId: optionalText(payload.familyId, 200),
+        valuationMethod: optionalText(payload.valuationMethod, 20),
+        groupBy,
+      });
+      return serialize({
+        groupBy,
+        rows: report.rows.map((row) => ({
+          key: row.key,
+          label: row.label,
+          sublabel: row.sublabel,
+          quantity: quantity(row.quantity),
+          value: amount(row.value),
+          unitCost: row.unitCost === null ? null : amount(row.unitCost),
+          impairment: amount(row.impairment),
+          netValue: amount(row.netValue),
+        })),
+        totals: {
+          quantity: quantity(report.totals.quantity),
+          value: amount(report.totals.value),
+          impairment: amount(report.totals.impairment),
+          netValue: amount(report.totals.netValue),
+        },
+      });
+    },
+
+    async getMovementReport(payloadValue: unknown) {
+      const payload = record(payloadValue, "Le journal des mouvements");
+      const { prisma, companyId } = await context(payload.companyId, "viewValuation");
+      const report = await stockMovementReport(prisma, {
+        companyId,
+        from: payload.from ? parseAccountingDate(payload.from, "La date de début") : null,
+        to: payload.to ? parseAccountingDate(payload.to, "La date de fin") : null,
+        articleId: optionalText(payload.articleId, 200),
+        warehouseId: optionalText(payload.warehouseId, 200),
+        documentType: payload.documentType ? requireStockDocumentType(payload.documentType) : null,
+        direction: optionalStockDirection(payload.direction),
+        reference: optionalText(payload.reference, 80),
+        limit: payload.limit ? Number(payload.limit) : undefined,
+      });
+      return serialize({
+        rows: report.movements.map((movement: any) => ({
+          id: movement.id,
+          date: movement.documentDate,
+          sequence: movement.sequence.toString(),
+          designation: describeMovement(movement),
+          documentType: movement.documentType,
+          direction: movement.direction,
+          article: movement.article,
+          warehouse: movement.warehouse,
+          lot: movement.lot,
+          counterparty: movement.document?.counterparty ?? null,
+          reference: movement.document?.reference ?? null,
+          documentId: movement.documentId,
+          documentStatus: movement.document?.status ?? null,
+          accountingEntryId: movement.document?.accountingEntryId ?? null,
+          quantity: quantity(movement.quantity),
+          value: amount(movement.value),
+          resultingQuantity: quantity(movement.resultingQuantity),
+          resultingValue: amount(movement.resultingValue),
+        })),
+        totals: {
+          inQuantity: quantity(report.totals.inQuantity),
+          outQuantity: quantity(report.totals.outQuantity),
+          inValue: amount(report.totals.inValue),
+          outValue: amount(report.totals.outValue),
+          netQuantity: quantity(report.totals.inQuantity - report.totals.outQuantity),
+          netValue: amount(report.totals.inValue - report.totals.outValue),
+        },
+      });
+    },
+
+    async getAnomalyReport(payloadValue: unknown) {
+      const payload = record(payloadValue, "Le rapport d'anomalies");
+      const { prisma, companyId } = await context(payload.companyId, "viewValuation");
+      const report = await stockAnomalyReport(prisma, {
+        companyId,
+        warehouseId: optionalText(payload.warehouseId, 200),
+      });
+      return serialize({
+        anomalies: report.anomalies.map((anomaly) => ({
+          ...anomaly,
+          quantity: quantity(anomaly.quantity),
+          value: amount(anomaly.value),
+          detail: anomaly.detail === null ? null : amount(anomaly.detail),
+        })),
+      });
+    },
+
+    async getAgeingReport(payloadValue: unknown) {
+      const payload = record(payloadValue, "Le rapport de rotation");
+      const { prisma, companyId } = await context(payload.companyId, "viewValuation");
+      const report = await stockAgeingReport(prisma, {
+        companyId,
+        asOf: payload.asOf ? parseAccountingDate(payload.asOf, "La date d'arrêté") : new Date(),
+        warehouseId: optionalText(payload.warehouseId, 200),
+        minimumDays: payload.minimumDays ? Number(payload.minimumDays) : null,
+      });
+      return serialize({
+        rows: report.rows.map((row: any) => ({
+          ...row,
+          quantity: quantity(row.quantity),
+          value: amount(row.value),
+        })),
+        buckets: report.buckets.map((bucket: any) => ({ ...bucket, value: amount(bucket.value) })),
+      });
     },
 
     /** The dossier's stock accounting configuration: journal and mappings. */
@@ -1033,12 +1641,32 @@ export function registerStockIpc(options: StockServiceOptions & { ipcMain: IpcLi
   ipcMain.handle("wheat:stock:article:save", (_event, payload) => service.saveArticle(payload));
   ipcMain.handle("wheat:stock:family:save", (_event, payload) => service.saveFamily(payload));
   ipcMain.handle("wheat:stock:unit:save", (_event, payload) => service.saveUnit(payload));
+  ipcMain.handle("wheat:stock:unit-conversion:save", (_event, payload) => service.saveUnitConversion(payload));
+  ipcMain.handle("wheat:stock:unit-conversion:delete", (_event, payload) => service.deleteUnitConversion(payload));
   ipcMain.handle("wheat:stock:warehouse:save", (_event, payload) => service.saveWarehouse(payload));
   ipcMain.handle("wheat:stock:lot:save", (_event, payload) => service.saveLot(payload));
   ipcMain.handle("wheat:stock:lots", (_event, payload) => service.listLots(payload));
   ipcMain.handle("wheat:stock:settings:save", (_event, payload) => service.saveSettings(payload));
   ipcMain.handle("wheat:stock:mapping:save", (_event, payload) => service.saveAccountMapping(payload));
   ipcMain.handle("wheat:stock:mapping:delete", (_event, payload) => service.deleteAccountMapping(payload));
+  ipcMain.handle("wheat:stock:inventory:list", (_event, payload) => service.listCampaigns(payload));
+  ipcMain.handle("wheat:stock:inventory:get", (_event, payload) => service.getCampaign(payload));
+  ipcMain.handle("wheat:stock:inventory:create", (_event, payload) => service.createCampaign(payload));
+  ipcMain.handle("wheat:stock:inventory:freeze", (_event, payload) => service.freezeCampaign(payload));
+  ipcMain.handle("wheat:stock:inventory:count", (_event, payload) => service.saveCampaignCounts(payload));
+  ipcMain.handle("wheat:stock:inventory:status", (_event, payload) => service.setCampaignStatus(payload));
+  ipcMain.handle("wheat:stock:inventory:validate", (_event, payload) => service.validateCampaign(payload));
+  ipcMain.handle("wheat:stock:impairment:list", (_event, payload) => service.listImpairments(payload));
+  ipcMain.handle("wheat:stock:impairment:preview", (_event, payload) => service.previewImpairment(payload));
+  ipcMain.handle("wheat:stock:impairment:save", (_event, payload) => service.saveImpairment(payload));
+  ipcMain.handle("wheat:stock:impairment:reverse", (_event, payload) => service.reverseImpairment(payload));
+  ipcMain.handle("wheat:stock:import:preview", (_event, payload) => service.previewImport(payload));
+  ipcMain.handle("wheat:stock:import:confirm", (_event, payload) => service.confirmImport(payload));
+  ipcMain.handle("wheat:stock:report:valuation", (_event, payload) => service.getValuationReport(payload));
+  ipcMain.handle("wheat:stock:report:movements", (_event, payload) => service.getMovementReport(payload));
+  ipcMain.handle("wheat:stock:report:variance", (_event, payload) => service.getCampaign(payload));
+  ipcMain.handle("wheat:stock:report:anomalies", (_event, payload) => service.getAnomalyReport(payload));
+  ipcMain.handle("wheat:stock:report:ageing", (_event, payload) => service.getAgeingReport(payload));
 
   return service;
 }

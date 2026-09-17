@@ -381,3 +381,39 @@ test("the final Wheat release database upgrades in place with all operational li
     fs.rmSync(temporaryRoot, { recursive: true, force: true });
   }
 });
+
+/**
+ * Every bundled migration still identifies itself, whatever Git did to its
+ * line endings on the way to this working tree.
+ *
+ * `core.autocrlf` is on by default on Windows, and these files have been
+ * committed from working trees in both states — the repository currently holds
+ * some SQL with LF and some with CRLF. A checksum computed byte-for-byte in one
+ * of those states fails in the other, and what that failure looks like to a user
+ * is Wheat refusing to open their accounting database after nothing worse than a
+ * checkout. `bundledMigrationMatches` in `electron/database.ts` therefore
+ * compares the bundled SQL as-is *and* with its line endings normalised.
+ *
+ * The recorded checksum in `_prisma_migrations` is a different question and is
+ * still compared exactly: it identifies which migration a database has applied.
+ */
+test("every registered migration matches its file regardless of line endings", () => {
+  const databaseSource = fs.readFileSync(path.join(root, "electron", "database.ts"), "utf8");
+  const registered = [...databaseSource.matchAll(
+    /name:\s*"([^"]+)",\s*sql:\s*\w+,(?:[\s\S]{0,400}?)checksum:\s*"([0-9a-f]{64})"/g,
+  )].map(([, name, checksum]) => ({ name, checksum }));
+  expect(registered.length).toBeGreaterThan(10);
+
+  const digest = (value) => crypto.createHash("sha256").update(value).digest("hex");
+  const mismatched = [];
+  for (const migration of registered) {
+    const file = path.join(root, "prisma", "migrations", migration.name, "migration.sql");
+    expect(fs.existsSync(file), `${migration.name} has no migration.sql`).toBeTruthy();
+    const raw = fs.readFileSync(file, "utf8");
+    const asLf = raw.replace(/\r\n/g, "\n");
+    const asCrlf = asLf.replace(/\n/g, "\r\n");
+    const accepted = [digest(raw), digest(asLf), digest(asCrlf)];
+    if (!accepted.includes(migration.checksum)) mismatched.push(migration.name);
+  }
+  expect(mismatched).toEqual([]);
+});

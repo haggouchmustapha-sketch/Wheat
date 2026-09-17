@@ -21,6 +21,7 @@ import formDraftsMigrationSql from "../prisma/migrations/20260902100000_wheat_fo
 import sageThirdPartyMigrationSql from "../prisma/migrations/20260902160000_sage_third_party_accounts/migration.sql?raw";
 import moroccanIdentityMigrationSql from "../prisma/migrations/20260908120000_moroccan_identity_fields/migration.sql?raw";
 import stockModuleMigrationSql from "../prisma/migrations/20260917120000_wheat_stock_module/migration.sql?raw";
+import stockCompletionMigrationSql from "../prisma/migrations/20260918090000_wheat_stock_completion/migration.sql?raw";
 import { resolveProfileDatabaseFile } from "./profileMigration";
 import { readWheatEnv } from "./runtimeEnvironment";
 
@@ -132,6 +133,14 @@ const migrations: Migration[] = [
     name: "20260917120000_wheat_stock_module",
     sql: stockModuleMigrationSql,
     checksum: "e5b4a44698266054f0b89e3f3038af4a744ace6f9b53d89ae9c26c4a2849aa4f",
+  },
+  {
+    name: "20260918090000_wheat_stock_completion",
+    sql: stockCompletionMigrationSql,
+    // Rebuilds three stock tables, which SQLite only allows with foreign keys
+    // off; the rows are carried across by the migration itself.
+    disablesForeignKeys: true,
+    checksum: "e69326e98a8aa45e995e20ae24900f06e95c0f961f92c891d675850a384c461a",
   },
 ];
 
@@ -282,6 +291,27 @@ function appliedMigrations(db: DatabaseSync) {
   return new Map(rows.map((row) => [row.migration_name, row.checksum]));
 }
 
+/**
+ * Whether the bundled SQL is the SQL this release was built from.
+ *
+ * Compared with its line endings normalised as well as as-is, because Git
+ * rewrites them on checkout — `core.autocrlf` is on by default on Windows, and
+ * these files have been committed from working trees in both states. A CRLF
+ * copy and an LF copy of the same migration are the same statements, and SQLite
+ * runs them identically; refusing one of them meant the application could not
+ * open its own database after nothing more than a checkout.
+ *
+ * This is deliberately *not* how a recorded checksum is compared. The value
+ * stored in `_prisma_migrations` identifies the migration an existing database
+ * has already applied, and that comparison stays exact: two releases carrying
+ * different SQL under one name must still be told apart.
+ */
+function bundledMigrationMatches(migration: Migration): boolean {
+  if (checksum(migration.sql) === migration.checksum) return true;
+  const normalized = migration.sql.replace(/\r\n/g, "\n");
+  return normalized !== migration.sql && checksum(normalized) === migration.checksum;
+}
+
 function verifyKnownMigrationChecksums(applied: Map<string, string>) {
   const knownNames = new Set(migrations.map((migration) => migration.name));
   const unknownNames = [...applied.keys()].filter((name) => !knownNames.has(name));
@@ -296,7 +326,7 @@ function verifyKnownMigrationChecksums(applied: Map<string, string>) {
     if (recorded && recorded !== migration.checksum) {
       throw new Error(`Database migration ${migration.name} does not match this Wheat release.`);
     }
-    if (checksum(migration.sql) !== migration.checksum) {
+    if (!bundledMigrationMatches(migration)) {
       throw new Error(`Bundled migration ${migration.name} failed its integrity check.`);
     }
   }

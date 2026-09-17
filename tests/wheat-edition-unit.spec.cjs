@@ -233,7 +233,9 @@ test("no accounting module consults the edition", () => {
     // accounting draft in every build. A quantity or a valuation that differed
     // between two builds would be the same failure as a balance that did.
     "stock.ts", "stockUnits.ts", "stockValuation.ts", "stockDomain.ts",
-    "stockValidation.ts", "stockAccounting.ts",
+    "stockValidation.ts", "stockAccounting.ts", "stockUnitConversion.ts",
+    "stockInventory.ts", "stockImpairment.ts", "stockImport.ts", "stockReports.ts",
+    "tabularSource.ts",
   ];
   const offenders = [];
   for (const file of accounting) {

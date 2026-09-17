@@ -172,7 +172,11 @@ async function validateDocument(dossier, input) {
           position: index + 1,
           articleId: line.article.id,
           quantity: line.quantity,
-          unitId: dossier.unit.id,
+          // Fixtures are entered in the article's own unit, so the quantity the
+          // register moves is the quantity typed and the frozen factor is 1.
+          baseQuantity: line.baseQuantity ?? line.quantity,
+          unitFactor: line.unitFactor ?? 1_000_000n,
+          unitId: line.unitId ?? dossier.unit.id,
           warehouseId: (line.warehouse ?? input.warehouse ?? dossier.warehouse).id,
           lotId: line.lotId ?? null,
           direction: line.direction ?? null,
@@ -488,7 +492,7 @@ test("a document cannot be validated twice", async () => {
       warehouseId: dossier.warehouse.id,
       lines: {
         create: [{
-          position: 1, articleId: article.id, quantity: qty("10"),
+          position: 1, articleId: article.id, quantity: qty("10"), baseQuantity: qty("10"),
           unitId: dossier.unit.id, warehouseId: dossier.warehouse.id, unitValue: money("100"),
         }],
       },
@@ -517,7 +521,7 @@ test("a forged companyId reaches nothing", async () => {
       warehouseId: first.warehouse.id,
       lines: {
         create: [{
-          position: 1, articleId: article.id, quantity: qty("10"),
+          position: 1, articleId: article.id, quantity: qty("10"), baseQuantity: qty("10"),
           unitId: first.unit.id, warehouseId: first.warehouse.id, unitValue: money("100"),
         }],
       },

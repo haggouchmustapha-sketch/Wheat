@@ -295,6 +295,54 @@
   margin: 0;
 }
 
+/*
+ * A note that states a refusal rather than a hint. It carries the warning
+ * colour and a rule down its edge, because the difference between "here is how
+ * this works" and "this will not be validated until you act" is the difference
+ * between a sentence someone skims and one they read.
+ */
+.stock-note--alert {
+  color: var(--text);
+  border-left: 3px solid var(--warning, var(--line));
+  padding-left: var(--space-4);
+}
+
+/* h4 sections inside a configuration card. */
+h4.stock-section-title {
+  display: block;
+  margin: var(--space-5) 0 var(--space-3);
+  font-size: 0.9375rem;
+}
+
+/*
+ * The counting sheet's editable cell. Sized to the column rather than to the
+ * form, and right-aligned so a counted quantity lines up with the theoretical
+ * one it is meant to be compared against.
+ */
+.stock-count-input {
+  width: 100%;
+  min-width: 6rem;
+  max-width: 10rem;
+  text-align: right;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xs);
+  background: var(--surface);
+  color: var(--text);
+  padding: var(--space-2) var(--space-3);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+.stock-count-input:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* A row that needs attention: an écart with no cost, a position that cannot be. */
+.stock-table__row--alert > td {
+  background: color-mix(in srgb, var(--warning, var(--line)) 12%, transparent);
+}
+
 .stock-actions {
   display: flex;
   flex-wrap: wrap;

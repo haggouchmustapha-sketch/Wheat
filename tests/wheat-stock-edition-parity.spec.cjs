@@ -79,7 +79,24 @@ test.beforeAll(async () => {
   const variationAccount = await prisma.account.create({
     data: { companyId: company.id, code: "6114", label: "Variation des stocks", classNo: 6, type: "EXPENSE" },
   });
-  await prisma.stockSettings.create({ data: { companyId: company.id, stockJournalId: journal.id } });
+  const provisionAccount = await prisma.account.create({
+    data: { companyId: company.id, code: "3911", label: "Provision dépréciation stocks", classNo: 3, type: "ASSET" },
+  });
+  const chargeAccount = await prisma.account.create({
+    data: { companyId: company.id, code: "6196", label: "Dotation provisions", classNo: 6, type: "EXPENSE" },
+  });
+  const reversalAccount = await prisma.account.create({
+    data: { companyId: company.id, code: "7196", label: "Reprise provisions", classNo: 7, type: "REVENUE" },
+  });
+  await prisma.stockSettings.create({
+    data: {
+      companyId: company.id,
+      stockJournalId: journal.id,
+      impairmentAccountId: provisionAccount.id,
+      impairmentChargeAccountId: chargeAccount.id,
+      impairmentReversalAccountId: reversalAccount.id,
+    },
+  });
   await prisma.stockAccountMapping.create({
     data: {
       companyId: company.id, scope: "COMPANY", scopeKey: "COMPANY",
@@ -159,6 +176,65 @@ test("one dossier, written and read by both builds, holds the same stock", () =>
   expect(lightweightFinal.entries).toHaveLength(3);
   expect(lightweightFinal.entries.every((entry) => entry.status === "DRAFT")).toBe(true);
   expect(lightweightFinal.references).toEqual(["BP-2026-000001", "CI-2026-000001", "SI-2026-000001"]);
+});
+
+/**
+ * The workflows added after the core: an inventory counted and adjusted by one
+ * build, a provision recorded by the other, and the valuation report both read.
+ *
+ * Same promise, same method — each step runs as a separate process under its own
+ * `WHEAT_EDITION`, against the one file the previous step left behind.
+ */
+test("an inventory and a provision written by one build read identically in the other", () => {
+  // Lightweight counts the dépôt and validates the écart. The position stood at
+  // 15 after the core scenario; the count says 14, so one unit is missing and
+  // leaves at the position's own 110.
+  const afterInventory = runAs("lightweight", "inventory");
+  expect(afterInventory.quantity).toBe("14.000000");
+  expect(afterInventory.value).toBe("1540.000000");
+  expect(afterInventory.campaigns).toHaveLength(1);
+  expect(afterInventory.campaigns[0]).toMatchObject({ reference: "INV-2026-000001", status: "VALIDATED" });
+  expect(afterInventory.campaigns[0].documents).toEqual(["IM-2026-000001"]);
+
+  const standardSeesInventory = runAs("standard", "read");
+  expect(standardSeesInventory.edition).toBe("standard");
+  expect(standardSeesInventory).toMatchObject({
+    quantity: afterInventory.quantity,
+    value: afterInventory.value,
+    unitCost: afterInventory.unitCost,
+    rows: afterInventory.rows,
+    campaigns: afterInventory.campaigns,
+    valuation: afterInventory.valuation,
+  });
+
+  // Standard records the provision; Lightweight reads the same figures back.
+  const afterImpairment = runAs("standard", "impairment");
+  expect(afterImpairment.impairments).toHaveLength(1);
+  expect(afterImpairment.impairments[0]).toMatchObject({
+    reference: "DEP-2026-000001",
+    status: "ACTIVE",
+    quantity: "14.000000",
+    valueBefore: "1540.000000",
+    amount: "540.000000",
+  });
+  // A provision changes what the stock is worth and not what is there.
+  expect(afterImpairment.quantity).toBe("14.000000");
+  expect(afterImpairment.value).toBe("1540.000000");
+  expect(afterImpairment.valuation).toMatchObject({
+    value: "1540.000000",
+    impairment: "540.000000",
+    netValue: "1000.000000",
+  });
+
+  const lightweightSeesImpairment = runAs("lightweight", "read");
+  expect(lightweightSeesImpairment.edition).toBe("lightweight");
+  expect(lightweightSeesImpairment).toMatchObject({
+    impairments: afterImpairment.impairments,
+    valuation: afterImpairment.valuation,
+    campaigns: afterImpairment.campaigns,
+    references: afterImpairment.references,
+    entries: afterImpairment.entries,
+  });
 });
 
 test("neither build writes a schema the other does not have", () => {

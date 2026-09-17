@@ -190,19 +190,20 @@ export function requireStockReferenceText(value: unknown, label: string, maxLeng
 }
 
 /**
- * Allocates the next number for a document type, per company and fiscal year.
+ * Allocates the next number of one stock series, per company and fiscal year.
  *
  * Its own counter, never `JournalPieceSequence`: an accounting piece number
  * answers to the journal it belongs to, and borrowing that sequence would make
  * a stock receipt consume a number the ledger was going to use.
+ *
+ * `type` names the series and `prefix` is what its numbers read as. Document
+ * types are the main caller, but not the only one — an inventory campaign is
+ * numbered the same way and for the same reason, and it is not a document.
  */
-export async function allocateStockDocumentNumber(
+export async function allocateStockSequenceNumber(
   tx: any,
-  input: { companyId: string; fiscalYearId: string; type: string; date: Date },
+  input: { companyId: string; fiscalYearId: string; type: string; prefix: string; date: Date },
 ): Promise<string> {
-  const definition = STOCK_DOCUMENT_TYPES[input.type];
-  if (!definition) throw new StockError("Le type de document de stock est invalide.");
-
   const existing = await tx.stockDocumentSequence.findUnique({
     where: { companyId_fiscalYearId_type: { companyId: input.companyId, fiscalYearId: input.fiscalYearId, type: input.type } },
   });
@@ -216,7 +217,7 @@ export async function allocateStockDocumentNumber(
           companyId: input.companyId,
           fiscalYearId: input.fiscalYearId,
           type: input.type,
-          prefix: definition.prefix,
+          prefix: input.prefix,
           nextNumber: 2,
           lastIssued: 1,
         },
@@ -225,6 +226,22 @@ export async function allocateStockDocumentNumber(
   const year = input.date.getUTCFullYear();
   return `${sequence.prefix}-${year}-${String(issued).padStart(sequence.padding, "0")}`;
 }
+
+/** The series a stock document belongs to, named by its own type. */
+export async function allocateStockDocumentNumber(
+  tx: any,
+  input: { companyId: string; fiscalYearId: string; type: string; date: Date },
+): Promise<string> {
+  const definition = STOCK_DOCUMENT_TYPES[input.type];
+  if (!definition) throw new StockError("Le type de document de stock est invalide.");
+  return allocateStockSequenceNumber(tx, { ...input, prefix: definition.prefix });
+}
+
+/** The series inventory campaigns are numbered in: INV-2026-000001. */
+export const STOCK_INVENTORY_SEQUENCE = { type: "INVENTORY_CAMPAIGN", prefix: "INV" } as const;
+
+/** The series impairments are numbered in: DEP-2026-000001. */
+export const STOCK_IMPAIRMENT_SEQUENCE = { type: "IMPAIRMENT", prefix: "DEP" } as const;
 
 /**
  * Reserves the next movement sequence numbers for a company.

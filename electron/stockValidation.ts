@@ -246,7 +246,9 @@ async function allocateLandedCosts(tx: any, document: any, lines: any[]) {
   const allocated = new Map<string, bigint>(lines.map((line) => [line.id, 0n]));
   for (const charge of charges) {
     const weights = charge.allocationMethod === "QUANTITY"
-      ? lines.map((line) => line.quantity)
+      // The article's own unit, never the line's: a charge spread over "3
+      // cartons and 4 unités" would weight a carton and a unité the same.
+      ? lines.map((line) => line.baseQuantity)
       : lines.map((line) => enteredLineValue(line) ?? 0n);
     let parts: bigint[];
     if (charge.allocationMethod === "MANUAL") {
@@ -292,7 +294,7 @@ function inboundValue(definition: any, line: any, allocatedCharge: bigint, posit
     return entered + allocatedCharge;
   }
   if (position.quantity > 0n) {
-    return proportionalShare(position.value, line.quantity, position.quantity) + allocatedCharge;
+    return proportionalShare(position.value, line.baseQuantity, position.quantity) + allocatedCharge;
   }
   throw new StockError(`Aucune valeur n'est connue pour « ${article.designation} » : le stock est vide, indiquez la valeur d'acquisition sur la ligne.`);
 }
@@ -401,7 +403,7 @@ export async function validateStockDocumentInTransaction(tx: any, input: Validat
   if (!settings) throw new StockError("Le paramétrage du stock est absent pour ce dossier.");
 
   for (const line of document.lines) {
-    if (line.quantity <= 0n) throw new StockError(`La ligne ${line.position} doit porter une quantité strictement positive.`);
+    if (line.baseQuantity <= 0n) throw new StockError(`La ligne ${line.position} doit porter une quantité strictement positive.`);
     if (line.article.companyId !== document.companyId) throw new StockError("Une ligne référence un article d'un autre dossier.");
     if (!line.article.active) throw new StockError(`L'article « ${line.article.designation} » est désactivé.`);
     if (line.article.lotTracking && !line.lotId) {
@@ -431,24 +433,24 @@ export async function validateStockDocumentInTransaction(tx: any, input: Validat
       // the company still owns the same goods at the same cost, so total
       // quantity and total value are unchanged by construction rather than by a
       // recomputation that could round differently on each side.
-      const outbound = await planOutbound(workspace, article, sourceWarehouse, line, line.quantity, settings.allowNegativeStock);
+      const outbound = await planOutbound(workspace, article, sourceWarehouse, line, line.baseQuantity, settings.allowNegativeStock);
       workspace.setPosition(article.id, sourceWarehouse.id, line.lotId ?? null, outbound.position);
       plans.push({
         articleId: article.id, article, warehouseId: sourceWarehouse.id, warehouse: sourceWarehouse,
         locationId: line.locationId ?? null, lotId: line.lotId ?? null, lineId: line.id,
-        direction: "OUT", quantity: line.quantity, value: outbound.value,
+        direction: "OUT", quantity: line.baseQuantity, value: outbound.value,
         consumptions: outbound.consumptions, opensLayer: false,
         resultingQuantity: outbound.position.quantity, resultingValue: outbound.position.value,
       });
 
       const targetWarehouse = document.targetWarehouse;
       const targetPosition = await workspace.position(article.id, targetWarehouse.id, line.lotId ?? null);
-      const receivedPosition = applyReceipt(targetPosition, line.quantity, outbound.value);
+      const receivedPosition = applyReceipt(targetPosition, line.baseQuantity, outbound.value);
       workspace.setPosition(article.id, targetWarehouse.id, line.lotId ?? null, receivedPosition);
       plans.push({
         articleId: article.id, article, warehouseId: targetWarehouse.id, warehouse: targetWarehouse,
         locationId: null, lotId: line.lotId ?? null, lineId: line.id,
-        direction: "IN", quantity: line.quantity, value: outbound.value,
+        direction: "IN", quantity: line.baseQuantity, value: outbound.value,
         consumptions: [], opensLayer: article.valuationMethod === "FIFO",
         resultingQuantity: receivedPosition.quantity, resultingValue: receivedPosition.value,
       });
@@ -458,24 +460,24 @@ export async function validateStockDocumentInTransaction(tx: any, input: Validat
     if (lineDirection === "IN") {
       const position = await workspace.position(article.id, sourceWarehouse.id, line.lotId ?? null);
       const value = inboundValue(definition, line, allocatedCharges.get(line.id) ?? 0n, position, article);
-      const next = applyReceipt(position, line.quantity, value);
+      const next = applyReceipt(position, line.baseQuantity, value);
       workspace.setPosition(article.id, sourceWarehouse.id, line.lotId ?? null, next);
       plans.push({
         articleId: article.id, article, warehouseId: sourceWarehouse.id, warehouse: sourceWarehouse,
         locationId: line.locationId ?? null, lotId: line.lotId ?? null, lineId: line.id,
-        direction: "IN", quantity: line.quantity, value,
+        direction: "IN", quantity: line.baseQuantity, value,
         consumptions: [], opensLayer: article.valuationMethod === "FIFO",
         resultingQuantity: next.quantity, resultingValue: next.value,
       });
       continue;
     }
 
-    const outbound = await planOutbound(workspace, article, sourceWarehouse, line, line.quantity, settings.allowNegativeStock);
+    const outbound = await planOutbound(workspace, article, sourceWarehouse, line, line.baseQuantity, settings.allowNegativeStock);
     workspace.setPosition(article.id, sourceWarehouse.id, line.lotId ?? null, outbound.position);
     plans.push({
       articleId: article.id, article, warehouseId: sourceWarehouse.id, warehouse: sourceWarehouse,
       locationId: line.locationId ?? null, lotId: line.lotId ?? null, lineId: line.id,
-      direction: "OUT", quantity: line.quantity, value: outbound.value,
+      direction: "OUT", quantity: line.baseQuantity, value: outbound.value,
       consumptions: outbound.consumptions, opensLayer: false,
       resultingQuantity: outbound.position.quantity, resultingValue: outbound.position.value,
     });
@@ -579,8 +581,8 @@ export async function validateStockDocumentInTransaction(tx: any, input: Validat
       existing.valueMicro += signedValue;
     } else {
       legsByArticle.set(plan.articleId, {
-        stockAccountId: accounts.stockAccountId,
-        variationAccountId: accounts.variationAccountId,
+        debitAccountId: accounts.stockAccountId,
+        creditAccountId: accounts.variationAccountId,
         label: `${definition.movementLabel} ${reference} — ${plan.article.designation}`.slice(0, 250),
         valueMicro: signedValue,
       });
@@ -791,6 +793,11 @@ export async function reverseStockDocumentInTransaction(tx: any, input: {
           articleId: line.articleId,
           quantity: line.quantity,
           unitId: line.unitId,
+          // The reversal restates the original line, so it keeps the unit it
+          // was entered in and the factor that was in force then — not
+          // whatever the conversion happens to say today.
+          baseQuantity: line.baseQuantity,
+          unitFactor: line.unitFactor,
           warehouseId: line.warehouseId,
           locationId: line.locationId,
           lotId: line.lotId,
@@ -860,8 +867,8 @@ export async function reverseStockDocumentInTransaction(tx: any, input: {
     if (existing) existing.valueMicro += signedValue;
     else {
       legsByArticle.set(plan.articleId, {
-        stockAccountId: accounts.stockAccountId,
-        variationAccountId: accounts.variationAccountId,
+        debitAccountId: accounts.stockAccountId,
+        creditAccountId: accounts.variationAccountId,
         label: `Contrepassation ${original.reference} — ${plan.article.designation}`.slice(0, 250),
         valueMicro: signedValue,
       });

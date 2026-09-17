@@ -108,12 +108,21 @@ export async function resolveStockAccounts(
   throw new Error(`Compte de stock non paramétré pour l'article « ${article.designation} ». Renseignez le paramétrage comptable du stock avant de valider.`);
 }
 
-/** One article's net effect on the ledger for a single stock document. */
+/**
+ * One balanced pair of lines, stated as "which account is debited when this
+ * value is positive".
+ *
+ * A stock document's leg is its stock account against its variation account. A
+ * dépréciation's leg is a charge account against a provision account, and a
+ * reprise reverses the pair. Saying it this way rather than naming the accounts
+ * after inventory is what lets both go through the same balanced-entry builder
+ * instead of two that could round differently.
+ */
 export type StockAccountingLeg = {
-  stockAccountId: string;
-  variationAccountId: string;
+  debitAccountId: string;
+  creditAccountId: string;
   label: string;
-  /** Positive when stock value increases, negative when it decreases. */
+  /** Positive debits `debitAccountId`; negative swaps the two. */
   valueMicro: bigint;
 };
 
@@ -161,7 +170,7 @@ export async function createStockDraftEntry(tx: any, request: StockEntryRequest)
     // Stock rises: the stock account is debited and the variation account
     // credited. Stock falls: exactly the reverse.
     lines.push({
-      accountId: increasing ? leg.stockAccountId : leg.variationAccountId,
+      accountId: increasing ? leg.debitAccountId : leg.creditAccountId,
       label: leg.label,
       debitCents: amount,
       creditCents: 0n,
@@ -169,7 +178,7 @@ export async function createStockDraftEntry(tx: any, request: StockEntryRequest)
       counterpartyId: null,
     });
     lines.push({
-      accountId: increasing ? leg.variationAccountId : leg.stockAccountId,
+      accountId: increasing ? leg.creditAccountId : leg.debitAccountId,
       label: leg.label,
       debitCents: 0n,
       creditCents: amount,

@@ -57,6 +57,27 @@ async function main() {
       type: "INTERNAL_CONSUMPTION", documentDate: "2026-01-10",
       lines: [{ articleId: article.id, quantity: "5" }],
     });
+  } else if (step === "inventory") {
+    // A physical inventory, end to end, in whichever build is running: the
+    // campaign, the frozen theoretical position, the count and the adjustment.
+    const campaign = await service.createCampaign({
+      companyId: company.id, countDate: "2026-02-01", warehouseId: warehouse.id,
+    });
+    await service.freezeCampaign({ companyId: company.id, campaignId: campaign.id });
+    await service.saveCampaignCounts({
+      companyId: company.id,
+      campaignId: campaign.id,
+      entries: [{ articleId: article.id, warehouseId: warehouse.id, countedQuantity: "14" }],
+    });
+    await service.validateCampaign({ companyId: company.id, campaignId: campaign.id });
+  } else if (step === "impairment") {
+    await service.saveImpairment({
+      companyId: company.id,
+      articleId: article.id,
+      impairmentDate: "2026-03-01",
+      recoverableValue: "1000",
+      reason: "Rotation lente",
+    });
   } else if (step !== "read") {
     throw new Error(`unknown step ${step}`);
   }
@@ -65,6 +86,11 @@ async function main() {
   const card = await service.getStockCard({ companyId: company.id, articleId: article.id });
   const state = await service.getStockState({ companyId: company.id });
   const documents = await service.listDocuments({ companyId: company.id });
+  const campaigns = await service.listCampaigns({ companyId: company.id });
+  const impairments = await service.listImpairments({ companyId: company.id });
+  const valuation = await service.getValuationReport({
+    companyId: company.id, asOf: "2026-12-31", groupBy: "ARTICLE",
+  });
 
   process.stdout.write(JSON.stringify({
     edition: edition.resolveWheatEdition(),
@@ -85,6 +111,24 @@ async function main() {
       reference: document.reference,
       status: document.accountingEntry.status,
     })),
+    campaigns: campaigns.map((campaign) => ({
+      reference: campaign.reference,
+      status: campaign.status,
+      documents: campaign.documents.map((document) => document.reference).sort(),
+    })),
+    impairments: impairments.map((impairment) => ({
+      reference: impairment.reference,
+      status: impairment.status,
+      quantity: impairment.quantity.display,
+      valueBefore: impairment.valueBefore.display,
+      amount: impairment.amount.display,
+    })),
+    valuation: {
+      quantity: valuation.totals.quantity.display,
+      value: valuation.totals.value.display,
+      impairment: valuation.totals.impairment.display,
+      netValue: valuation.totals.netValue.display,
+    },
   }));
 }
 

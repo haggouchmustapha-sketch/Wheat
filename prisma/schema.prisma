@@ -83,25 +83,25 @@ model Company {
 }
 
 model FiscalYear {
-  id               String                 @id @default(cuid())
+  id               String                  @id @default(cuid())
   companyId        String
   label            String
   startsOn         DateTime
   endsOn           DateTime
   lockedTo         DateTime?
-  status           String                 @default("OPEN")
+  status           String                  @default("OPEN")
   closedAt         DateTime?
   closedByUserId   String?
-  closeRunId       String?                @unique
+  closeRunId       String?                 @unique
   reopenedAt       DateTime?
   reopenedByUserId String?
   reopenReason     String?
-  version          Int                    @default(1)
-  company          Company                @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  closedBy         User?                  @relation("FiscalYearClosedBy", fields: [closedByUserId], references: [id], onDelete: SetNull)
-  reopenedBy       User?                  @relation("FiscalYearReopenedBy", fields: [reopenedByUserId], references: [id], onDelete: SetNull)
-  closeRun         FiscalCloseRun?        @relation("FiscalYearActiveClose", fields: [closeRunId], references: [id], onDelete: SetNull)
-  closeRuns        FiscalCloseRun[]       @relation("FiscalYearCloseRuns")
+  version          Int                     @default(1)
+  company          Company                 @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  closedBy         User?                   @relation("FiscalYearClosedBy", fields: [closedByUserId], references: [id], onDelete: SetNull)
+  reopenedBy       User?                   @relation("FiscalYearReopenedBy", fields: [reopenedByUserId], references: [id], onDelete: SetNull)
+  closeRun         FiscalCloseRun?         @relation("FiscalYearActiveClose", fields: [closeRunId], references: [id], onDelete: SetNull)
+  closeRuns        FiscalCloseRun[]        @relation("FiscalYearCloseRuns")
   pieceSequences   JournalPieceSequence[]
   openingRuns      OpeningBalanceRun[]
   fiscalPackages   FiscalPackage[]
@@ -112,29 +112,29 @@ model FiscalYear {
 }
 
 model User {
-  id                    String                    @id @default(cuid())
-  name                  String
-  email                 String                    @unique
-  role                  String
-  twoFactorOn           Boolean                   @default(false)
-  companyUsers          CompanyUser[]
-  activityLogs          ActivityLog[]
-  ledgerImportBatches   LedgerImportBatch[]       @relation("LedgerImportActor")
-  auditEvents           AuditEvent[]              @relation("AuditEventActor")
-  auditSeals            AuditSeal[]               @relation("AuditSealActor")
-  fiscalYearsClosed     FiscalYear[]              @relation("FiscalYearClosedBy")
-  fiscalYearsReopened   FiscalYear[]              @relation("FiscalYearReopenedBy")
-  invoiceArtifacts      InvoiceArtifact[]         @relation("InvoiceArtifactActor")
-  taxConfigurations     TaxConfigurationVersion[] @relation("TaxConfigurationActor")
-  vatWorkpapersReviewed VatWorkpaper[]            @relation("VatWorkpaperReviewer")
-  vatWorkpapersFiled    VatWorkpaper[]            @relation("VatWorkpaperFiler")
-  fiscalCloseRuns       FiscalCloseRun[]          @relation("FiscalCloseActor")
-  fiscalTablesReviewed  FiscalTableWorkpaper[]    @relation("FiscalTableReviewer")
-  stockDocumentsCreated   StockDocument[]          @relation("StockDocumentCreator")
-  stockDocumentsValidated StockDocument[]          @relation("StockDocumentValidator")
-  stockCampaignsCreated   StockInventoryCampaign[] @relation("StockCampaignCreator")
-  stockCampaignsClosed    StockInventoryCampaign[] @relation("StockCampaignCloser")
-  stockImpairmentsCreated StockImpairment[]        @relation("StockImpairmentCreator")
+  id                      String                    @id @default(cuid())
+  name                    String
+  email                   String                    @unique
+  role                    String
+  twoFactorOn             Boolean                   @default(false)
+  companyUsers            CompanyUser[]
+  activityLogs            ActivityLog[]
+  ledgerImportBatches     LedgerImportBatch[]       @relation("LedgerImportActor")
+  auditEvents             AuditEvent[]              @relation("AuditEventActor")
+  auditSeals              AuditSeal[]               @relation("AuditSealActor")
+  fiscalYearsClosed       FiscalYear[]              @relation("FiscalYearClosedBy")
+  fiscalYearsReopened     FiscalYear[]              @relation("FiscalYearReopenedBy")
+  invoiceArtifacts        InvoiceArtifact[]         @relation("InvoiceArtifactActor")
+  taxConfigurations       TaxConfigurationVersion[] @relation("TaxConfigurationActor")
+  vatWorkpapersReviewed   VatWorkpaper[]            @relation("VatWorkpaperReviewer")
+  vatWorkpapersFiled      VatWorkpaper[]            @relation("VatWorkpaperFiler")
+  fiscalCloseRuns         FiscalCloseRun[]          @relation("FiscalCloseActor")
+  fiscalTablesReviewed    FiscalTableWorkpaper[]    @relation("FiscalTableReviewer")
+  stockDocumentsCreated   StockDocument[]           @relation("StockDocumentCreator")
+  stockDocumentsValidated StockDocument[]           @relation("StockDocumentValidator")
+  stockCampaignsCreated   StockInventoryCampaign[]  @relation("StockCampaignCreator")
+  stockCampaignsClosed    StockInventoryCampaign[]  @relation("StockCampaignCloser")
+  stockImpairmentsCreated StockImpairment[]         @relation("StockImpairmentCreator")
 }
 
 model CompanyUser {
@@ -167,7 +167,7 @@ model SageExportProfile {
 }
 
 model Account {
-  id                       String               @id @default(cuid())
+  id                       String                @id @default(cuid())
   companyId                String
   code                     String
   label                    String
@@ -175,31 +175,31 @@ model Account {
   parentCode               String?
   classNo                  Int
   type                     String
-  hierarchyDepth           Int                  @default(0)
-  isStandard               Boolean              @default(false)
-  active                   Boolean              @default(true)
-  category                 String               @default("CUSTOM")
+  hierarchyDepth           Int                   @default(0)
+  isStandard               Boolean               @default(false)
+  active                   Boolean               @default(true)
+  category                 String                @default("CUSTOM")
   reportNature             String?
-  auxiliaryEligible        Boolean              @default(false)
-  expectedBalance          String               @default("VARIABLE")
-  reportingMappingsJson    String               @default("{}")
-  fiscalMappingsJson       String               @default("{}")
+  auxiliaryEligible        Boolean               @default(false)
+  expectedBalance          String                @default("VARIABLE")
+  reportingMappingsJson    String                @default("{}")
+  fiscalMappingsJson       String                @default("{}")
   effectiveFrom            DateTime?
   effectiveTo              DateTime?
   standardVersion          String?
-  postable                 Boolean              @default(true)
-  searchText               String               @default("")
-  version                  Int                  @default(1)
-  company                  Company              @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  postable                 Boolean               @default(true)
+  searchText               String                @default("")
+  version                  Int                   @default(1)
+  company                  Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
   lines                    EntryLine[]
-  bankAccounts             BankAccount[]        @relation("BankLedgerAccount")
-  receivableCounterparties Counterparty[]       @relation("CounterpartyReceivable")
-  payableCounterparties    Counterparty[]       @relation("CounterpartyPayable")
-  controlledInvoices       Invoice[]            @relation("InvoiceControl")
-  vatInvoices              Invoice[]            @relation("InvoiceVat")
+  bankAccounts             BankAccount[]         @relation("BankLedgerAccount")
+  receivableCounterparties Counterparty[]        @relation("CounterpartyReceivable")
+  payableCounterparties    Counterparty[]        @relation("CounterpartyPayable")
+  controlledInvoices       Invoice[]             @relation("InvoiceControl")
+  vatInvoices              Invoice[]             @relation("InvoiceVat")
   invoiceLines             InvoiceLine[]
-  controlledPayments       Payment[]            @relation("PaymentControl")
-  settledPayments          Payment[]            @relation("PaymentSettlement")
+  controlledPayments       Payment[]             @relation("PaymentControl")
+  settledPayments          Payment[]             @relation("PaymentSettlement")
   taxRateDefinitions       TaxRateDefinition[]
   openingBalanceLines      OpeningBalanceLine[]
   stockMappingsAsStock     StockAccountMapping[] @relation("StockMappingStockAccount")
@@ -351,9 +351,9 @@ model Counterparty {
   createdAt                  DateTime @default(now())
   updatedAt                  DateTime @updatedAt
 
-  company                  Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  defaultReceivableAccount Account?    @relation("CounterpartyReceivable", fields: [defaultReceivableAccountId], references: [id], onDelete: SetNull)
-  defaultPayableAccount    Account?    @relation("CounterpartyPayable", fields: [defaultPayableAccountId], references: [id], onDelete: SetNull)
+  company                  Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  defaultReceivableAccount Account?        @relation("CounterpartyReceivable", fields: [defaultReceivableAccountId], references: [id], onDelete: SetNull)
+  defaultPayableAccount    Account?        @relation("CounterpartyPayable", fields: [defaultPayableAccountId], references: [id], onDelete: SetNull)
   invoices                 Invoice[]
   payments                 Payment[]
   entryLines               EntryLine[]
@@ -570,6 +570,7 @@ model Document {
   vatWorkpaperEvidence  VatWorkpaperEvidence[]
   vatAdjustmentEvidence VatWorkpaperAdjustment[]
   fiscalTableEvidence   FiscalTableEvidence[]
+  stockImpairments      StockImpairment[]        @relation("StockImpairmentDocument")
   createdAt             DateTime                 @default(now())
 
   @@index([companyId, status, createdAt])
@@ -1522,6 +1523,8 @@ model StockUnitConversion {
   fromUnitId String
   toUnitId   String
   factor     BigInt
+  active     Boolean  @default(true)
+  version    Int      @default(1)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
@@ -1617,6 +1620,7 @@ model StockWarehouse {
   balances            StockBalance[]
   fifoLayers          StockFifoLayer[]
   campaigns           StockInventoryCampaign[]
+  inventoryCounts     StockInventoryCount[]
   impairments         StockImpairment[]
 
   @@unique([companyId, code])
@@ -1685,27 +1689,27 @@ model StockDocumentSequence {
 }
 
 model StockDocument {
-  id                   String    @id @default(cuid())
-  companyId            String
-  fiscalYearId         String
-  type                 String
-  reference            String
-  documentDate         DateTime
-  warehouseId          String
-  targetWarehouseId    String?
-  counterpartyId       String?
-  status               String    @default("DRAFT")
-  note                 String?
-  createdByUserId      String?
-  validatedByUserId    String?
-  validatedAt          DateTime?
-  reversalOfId         String?
-  reversedAt           DateTime?
-  accountingEntryId    String?
-  inventoryCampaignId  String?
-  version              Int       @default(1)
-  createdAt            DateTime  @default(now())
-  updatedAt            DateTime  @updatedAt
+  id                  String    @id @default(cuid())
+  companyId           String
+  fiscalYearId        String
+  type                String
+  reference           String
+  documentDate        DateTime
+  warehouseId         String
+  targetWarehouseId   String?
+  counterpartyId      String?
+  status              String    @default("DRAFT")
+  note                String?
+  createdByUserId     String?
+  validatedByUserId   String?
+  validatedAt         DateTime?
+  reversalOfId        String?
+  reversedAt          DateTime?
+  accountingEntryId   String?
+  inventoryCampaignId String?
+  version             Int       @default(1)
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
 
   company           Company                 @relation(fields: [companyId], references: [id], onDelete: Cascade)
   fiscalYear        FiscalYear              @relation(fields: [fiscalYearId], references: [id])
@@ -1735,10 +1739,19 @@ model StockDocumentLine {
   documentId           String
   position             Int
   articleId            String
-  /// Always positive. Direction belongs to the document type; an ADJUSTMENT
-  /// states its own in `direction` rather than by carrying a negative quantity.
+  /// Always positive, and expressed in this line's own `unitId` — what the
+  /// user actually entered. Direction belongs to the document type; an
+  /// ADJUSTMENT states its own in `direction` rather than by carrying a
+  /// negative quantity.
   quantity             BigInt
   unitId               String
+  /// `quantity` in the article's base unit. This is what the register moves,
+  /// and the only quantity valuation ever sees.
+  baseQuantity         BigInt    @default(0)
+  /// `1 unitId = unitFactor base units`, scaled by 1e6 and frozen when the line
+  /// was written. Editing the conversion afterwards changes what new lines
+  /// resolve to and leaves every movement already in the ledger alone.
+  unitFactor           BigInt    @default(1000000)
   warehouseId          String
   locationId           String?
   lotId                String?
@@ -1928,15 +1941,23 @@ model StockLandedCostAllocation {
   @@unique([landedCostId, documentLineId])
 }
 
+/// A physical count, frozen against the theoretical position at `countDate`.
+///
+/// `warehouseId` is null when the campaign covers every active dépôt of the
+/// dossier; each count row names the dépôt it belongs to either way, so the
+/// variance report and the adjustment it produces read the same in both cases.
 model StockInventoryCampaign {
   id              String    @id @default(cuid())
   companyId       String
   reference       String
-  warehouseId     String
+  warehouseId     String?
   countDate       DateTime
-  status          String    @default("OPEN")
+  status          String    @default("DRAFT")
   note            String?
   createdByUserId String?
+  /// When the theoretical snapshot was taken. A campaign without one has not
+  /// frozen anything yet and holds no counts.
+  frozenAt        DateTime?
   closedAt        DateTime?
   closedByUserId  String?
   version         Int       @default(1)
@@ -1944,7 +1965,7 @@ model StockInventoryCampaign {
   updatedAt       DateTime  @updatedAt
 
   company   Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  warehouse StockWarehouse        @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  warehouse StockWarehouse?       @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
   createdBy User?                 @relation("StockCampaignCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
   closedBy  User?                 @relation("StockCampaignCloser", fields: [closedByUserId], references: [id], onDelete: SetNull)
   counts    StockInventoryCount[]
@@ -1954,57 +1975,78 @@ model StockInventoryCampaign {
   @@index([companyId, status])
 }
 
+/// One counted position. `expectedQuantity`/`expectedValue` are the frozen
+/// theoretical figures; `countedQuantity` is what the person found, and stays
+/// null until somebody counts it — which is a different thing from zero.
 model StockInventoryCount {
-  id               String   @id @default(cuid())
+  id               String    @id @default(cuid())
   campaignId       String
   articleId        String
+  warehouseId      String
   lotId            String?
-  lotKey           String   @default("")
+  lotKey           String    @default("")
   locationId       String?
-  expectedQuantity BigInt   @default(0)
-  expectedValue    BigInt   @default(0)
+  expectedQuantity BigInt    @default(0)
+  expectedValue    BigInt    @default(0)
   countedQuantity  BigInt?
+  countedAt        DateTime?
+  /// Acquisition value per base unit, for an excédent entering a position the
+  /// dossier holds nothing of. Null everywhere else: a surplus that lands on an
+  /// existing position is worth what that position is worth.
+  unitValue        BigInt?
   note             String?
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
-  campaign StockInventoryCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
-  article  StockArticle           @relation(fields: [articleId], references: [id], onDelete: Restrict)
-  lot      StockLot?              @relation(fields: [lotId], references: [id], onDelete: Restrict)
-  location StockLocation?         @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  campaign  StockInventoryCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  article   StockArticle           @relation(fields: [articleId], references: [id], onDelete: Restrict)
+  warehouse StockWarehouse         @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  lot       StockLot?              @relation(fields: [lotId], references: [id], onDelete: Restrict)
+  location  StockLocation?         @relation(fields: [locationId], references: [id], onDelete: SetNull)
 
-  @@unique([campaignId, articleId, lotKey])
+  @@unique([campaignId, warehouseId, articleId, lotKey])
+  @@index([campaignId])
 }
 
 /// An impairment changes what stock is worth in the accounts without changing
 /// what is physically there, so it writes no movement and touches no balance.
 model StockImpairment {
-  id                String    @id @default(cuid())
-  companyId         String
-  reference         String
-  articleId         String
-  warehouseId       String?
-  impairmentDate    DateTime
-  valueBefore       BigInt
-  amount            BigInt
-  reason            String
-  status            String    @default("ACTIVE")
-  accountingEntryId String?
-  reversalOfId      String?
-  reversedAt        DateTime?
-  createdByUserId   String?
-  version           Int       @default(1)
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
+  id                   String    @id @default(cuid())
+  companyId            String
+  reference            String
+  articleId            String
+  warehouseId          String?
+  impairmentDate       DateTime
+  /// The position the decision was taken against: what was held, what it was
+  /// carried at, and what the accountant judged it recoverable for. The amount
+  /// is derived from the last two, and keeping all three is what makes it
+  /// auditable rather than merely reproducible.
+  quantity             BigInt    @default(0)
+  valueBefore          BigInt
+  recoverableValue     BigInt    @default(0)
+  amount               BigInt
+  reason               String
+  note                 String?
+  status               String    @default("ACTIVE")
+  accountingEntryId    String?
+  supportingDocumentId String?
+  reversalOfId         String?
+  reversedAt           DateTime?
+  createdByUserId      String?
+  version              Int       @default(1)
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
 
-  company         Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  article         StockArticle      @relation(fields: [articleId], references: [id], onDelete: Restrict)
-  warehouse       StockWarehouse?   @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
-  accountingEntry Entry?            @relation("StockImpairmentEntry", fields: [accountingEntryId], references: [id], onDelete: SetNull)
-  reversalOf      StockImpairment?  @relation("StockImpairmentReversals", fields: [reversalOfId], references: [id], onDelete: Restrict)
-  reversals       StockImpairment[] @relation("StockImpairmentReversals")
-  createdBy       User?             @relation("StockImpairmentCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  company            Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  article            StockArticle      @relation(fields: [articleId], references: [id], onDelete: Restrict)
+  warehouse          StockWarehouse?   @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  accountingEntry    Entry?            @relation("StockImpairmentEntry", fields: [accountingEntryId], references: [id], onDelete: SetNull)
+  supportingDocument Document?         @relation("StockImpairmentDocument", fields: [supportingDocumentId], references: [id], onDelete: SetNull)
+  reversalOf         StockImpairment?  @relation("StockImpairmentReversals", fields: [reversalOfId], references: [id], onDelete: Restrict)
+  reversals          StockImpairment[] @relation("StockImpairmentReversals")
+  createdBy          User?             @relation("StockImpairmentCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
 
   @@unique([companyId, reference])
   @@index([companyId, articleId, status])
+  @@index([supportingDocumentId])
 }

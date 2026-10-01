@@ -1,0 +1,59 @@
+/* Dashboard presentation stays scoped and uses the shared Wheat tokens. */
+.wt-dashboard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+  min-width: 0;
+}
+.wt-dashboard .wt-page-header {
+  margin-bottom: 0;
+}
+.wt-dashboard__scope {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-5);
+  padding: var(--space-5) var(--space-6);
+  border: var(--border-width) solid var(--line-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+.wt-dashboard__scope > span {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+.wt-dashboard__scope svg {
+  flex-shrink: 0;
+}
+.wt-dashboard .metric-card {
+  min-width: 0;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-xs);
+  background: var(--surface);
+}
+.wt-dashboard .metric-card .wt-stat__value {
+  font-size: clamp(var(--text-xl), 2.2vw, var(--text-3xl));
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.wt-dashboard .wt-card {
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-xs);
+}
+@media (max-width: 860px) {
+  .wt-dashboard {
+    gap: var(--space-6);
+  }
+  .wt-dashboard__scope {
+    align-items: flex-start;
+  }
+}
+@media print {
+  .wt-dashboard__scope .wt-btn {
+    display: none;
+  }
+}

@@ -11,10 +11,6 @@ const ZERO_METRICS = Object.freeze({
   entryCount: 0,
 });
 
-function absolute(value: bigint) {
-  return value < 0n ? -value : value;
-}
-
 const SETTLED_INVOICE_STATUS = new Set(["PAID", "PAID_LATE", "OVERPAID", "VOIDED"]);
 
 /**
@@ -90,8 +86,8 @@ export async function buildDashboardMetrics(prisma: any, companyId?: string, asO
   for (const total of accountTotals) {
     const debit = BigInt(total._sum.debitCents ?? 0);
     const credit = BigInt(total._sum.creditCents ?? 0);
-    if (accountClass.get(total.accountId) === 7) revenueCents += absolute(credit - debit);
-    if (accountClass.get(total.accountId) === 6) expensesCents += absolute(debit - credit);
+    if (accountClass.get(total.accountId) === 7) revenueCents += credit - debit;
+    if (accountClass.get(total.accountId) === 6) expensesCents += debit - credit;
   }
 
   const allocatedByInvoice = new Map<string, bigint>(paymentTotals.map((total: any) => [total.invoiceId, BigInt(total._sum.amountCents ?? 0)]));

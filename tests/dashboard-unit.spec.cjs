@@ -55,3 +55,33 @@ test("dashboard does not issue unscoped queries when no company is active", asyn
   const prisma = new Proxy({}, { get: () => { throw new Error("No query should run"); } });
   await expect(dashboard.buildDashboardMetrics(prisma, undefined)).resolves.toMatchObject({ entryCount: 0, unpaidTotalCents: 0n });
 });
+
+test("dashboard keeps negative account balances signed after corrections", async () => {
+  const prisma = {
+    entryLine: {
+      groupBy: async () => [
+        { accountId: "ordinary-sales", _sum: { debitCents: 0n, creditCents: 100_000n } },
+        { accountId: "sales-corrections", _sum: { debitCents: 20_000n, creditCents: 0n } },
+        { accountId: "ordinary-expenses", _sum: { debitCents: 30_000n, creditCents: 0n } },
+        { accountId: "expense-refund", _sum: { debitCents: 0n, creditCents: 5_000n } },
+      ],
+    },
+    account: {
+      findMany: async () => [
+        { id: "ordinary-sales", classNo: 7 },
+        { id: "sales-corrections", classNo: 7 },
+        { id: "ordinary-expenses", classNo: 6 },
+        { id: "expense-refund", classNo: 6 },
+      ],
+    },
+    invoice: { findMany: async () => [], groupBy: async () => [] },
+    paymentAllocation: { groupBy: async () => [] },
+    bankAccount: { aggregate: async () => ({ _sum: { balanceCents: 0n } }) },
+    entry: { count: async () => 4 },
+  };
+
+  const result = await dashboard.buildDashboardMetrics(prisma, "company-1");
+  expect(result.revenueCents).toBe(80_000n);
+  expect(result.expensesCents).toBe(25_000n);
+  expect(result.resultCents).toBe(55_000n);
+});

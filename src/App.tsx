@@ -126,9 +126,9 @@ import "./styles/components.css";
 import "./styles/shell.css";
 import "./App.css";
 import "./SingleFont.css";
+import "./styles/dashboard.css";
 
 const VatChart = lazy(() => import("./components/DashboardCharts").then((module) => ({ default: module.VatChart })));
-const MetricSparkline = lazy(() => import("./components/DashboardCharts").then((module) => ({ default: module.MetricSparkline })));
 
 /**
  * The large workspaces, loaded when somebody opens them.
@@ -913,15 +913,6 @@ const readStoredLanguage = (): AppLanguage => {
 const languageName = (language: AppLanguage) => languageOptions.find((option) => option.value === language)?.nativeName ?? "Francais";
 
 const navLabel = (page: Page, language: AppLanguage) => navLabels[language]?.[page] ?? navLabels.fr[page] ?? page;
-
-const sparkData = [
-  { name: "Jan", value: 82 },
-  { name: "Fév", value: 91 },
-  { name: "Mar", value: 88 },
-  { name: "Avr", value: 102 },
-  { name: "Mai", value: 118 },
-  { name: "Juin", value: 111 },
-];
 
 const bytesFromBase64 = (base64: string) => Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
 const textFromBase64 = (base64: string) => new TextDecoder("utf-8").decode(bytesFromBase64(base64));
@@ -3948,36 +3939,11 @@ function ProductionPage({
  * Every figure carries a plain-language tooltip explaining what it measures
  * and where it comes from, so the screen reads without accounting training.
  */
-function Dashboard({ data, entries, metrics, setPage, alertsMuted, setAlertsMuted, notify, language }: any) {
+function Dashboard({ data, entries, metrics, setPage, alertsMuted, setAlertsMuted, language }: any) {
   const labels = pageCopy[language as AppLanguage] ?? pageCopy.fr;
   const postedEntries = ledgerEntries(entries);
   const currentCompany = (data?.companies ?? []).find((company: any) => company.id === data?.activeCompanyId) ?? data?.companies?.[0];
-  const fiscalYear = (currentCompany?.fiscalYears ?? []).find((year: any) => year.status === "OPEN") ?? currentCompany?.fiscalYears?.[0];
   const taxPeriod = data?.taxPeriods?.[0];
-
-  const periodOptions: WheatSelectOption[] = [
-    { value: "fiscal-year", label: fiscalYear ? `Exercice ${date(fiscalYear.startsOn)} - ${date(fiscalYear.endsOn)}` : "Toutes les périodes", note: "Période comptable ouverte" },
-    { value: "tax-period", label: taxPeriod?.label ?? "Période TVA non définie", note: "Période de déclaration TVA" },
-    { value: "all", label: "Depuis l'origine du dossier", note: "Toutes les écritures enregistrées" },
-  ];
-  const statusOptions: WheatSelectOption[] = [
-    { value: "all", label: "Tous les statuts", note: "Brouillons et écritures comptabilisées" },
-    { value: "posted", label: "Comptabilisées", note: "Definitives, incluses dans les états" },
-    { value: "draft", label: "A contrôler", note: "Brouillons sans effet comptable" },
-  ];
-  const tagOptions: WheatSelectOption[] = [
-    { value: "all", label: "Tous les domaines" },
-    { value: "vat", label: "TVA" },
-    { value: "bank", label: "Banque" },
-    { value: "ocr", label: "Documents OCR" },
-  ];
-
-  const [period, setPeriod] = useState("fiscal-year");
-  const [status, setStatus] = useState("all");
-  const [tag, setTag] = useState("all");
-  const [filterApplied, setFilterApplied] = useState(false);
-
-  const labelOf = (options: WheatSelectOption[], value: string) => options.find((option) => option.value === value)?.label ?? value;
 
   const vatData = [
     { name: "TVA collectée", value: metrics.collectedVat, color: "var(--chart-1)" },
@@ -3991,7 +3957,7 @@ function Dashboard({ data, entries, metrics, setPage, alertsMuted, setAlertsMute
     : 0;
 
   return (
-    <>
+    <div className="wt-dashboard">
       <PageHeader
         icon={<BarChart3 size={22} aria-hidden="true" />}
         title="Tableau de bord"
@@ -3999,7 +3965,7 @@ function Dashboard({ data, entries, metrics, setPage, alertsMuted, setAlertsMute
         meta={
           <>
             <span><Building2 size={13} aria-hidden="true" /> {currentCompany?.name ?? "Aucun dossier"}</span>
-            <span><Calendar size={13} aria-hidden="true" /> {labelOf(periodOptions, period)}</span>
+            <span><Calendar size={13} aria-hidden="true" /> Depuis l’origine du dossier</span>
           </>
         }
         actions={
@@ -4012,7 +3978,7 @@ function Dashboard({ data, entries, metrics, setPage, alertsMuted, setAlertsMute
           summary: "Que veulent dire ces chiffres ?",
           content: (
             <>
-              <p>Le <strong>chiffré d'affaires HT</strong> est le total des ventes hors taxe. Le <strong>résultat comptable</strong> est la difference entre les produits (classe 7) et les charges (classe 6).</p>
+              <p>Le <strong>total des produits</strong> est le solde net des comptes de classe 7 depuis l’origine du dossier. Le <strong>résultat comptable</strong> est la difference entre les produits (classe 7) et les charges (classe 6).</p>
               <p>La <strong>TVA à décaisser</strong> est ce que l'entreprise doit reverser ; un <strong>credit de TVA</strong> signifie l'inverse.</p>
               <p>Tous ces chiffres proviennent uniquement des écritures <strong>comptabilisées</strong>. Les brouillons n'y figurent pas, ce qui explique un écart avec la saisie en cours.</p>
             </>
@@ -4020,49 +3986,17 @@ function Dashboard({ data, entries, metrics, setPage, alertsMuted, setAlertsMute
         }}
       />
 
-      <div className="wt-filterbar" role="group" aria-label="Filtres du tableau de bord">
-        <Field label="Période" htmlFor="dashboard-period" hint="Change la fenêtre de calcul des indicateurs.">
-          <WheatSelect id="dashboard-period" options={periodOptions} value={period} onChange={setPeriod} ariaLabel="Période" />
-        </Field>
-        <Field label="Statut des écritures" htmlFor="dashboard-status" hint="Un brouillon n'a aucun effet comptable.">
-          <WheatSelect id="dashboard-status" options={statusOptions} value={status} onChange={setStatus} ariaLabel="Statut des écritures" />
-        </Field>
-        <Field label="Domaine" htmlFor="dashboard-tag" hint="Restreint les alertes affichees.">
-          <WheatSelect id="dashboard-tag" options={tagOptions} value={tag} onChange={setTag} ariaLabel="Domaine" />
-        </Field>
-        <div className="wt-filterbar__actions">
-          <Button
-            variant={filterApplied ? "soft" : "secondary"}
-            icon={<Filter size={15} />}
-            onClick={() => {
-              setFilterApplied(true);
-              notify(`Filtre actif : ${labelOf(periodOptions, period)} · ${labelOf(statusOptions, status)} · ${labelOf(tagOptions, tag)}`, "info");
-            }}
-          >
-            Appliquer
-          </Button>
-          <Button
-            variant="ghost"
-            icon={<RefreshCw size={15} />}
-            onClick={() => {
-              setAlertsMuted(false);
-              setPeriod("fiscal-year");
-              setStatus("all");
-              setTag("all");
-              setFilterApplied(false);
-            }}
-          >
-            Reinitialiser
-          </Button>
-        </div>
+      <div className="wt-dashboard__scope">
+        <span><Calendar size={15} aria-hidden="true" /> Produits et résultat : toutes les écritures comptabilisées du dossier.</span>
+        <Button variant="ghost" size="sm" onClick={() => setPage("reports")} trailingIcon={<ArrowRight size={14} />}>Choisir une période dans les rapports</Button>
       </div>
 
       <div className="wt-grid wt-grid--narrow">
         <MetricCard
-          title="Chiffre d'affaires (HT)"
+          title="Produits (classe 7)"
           value={metricMoney(metrics, "revenue")}
           delta={`${metrics.entryCount} écriture(s) comptabilisée(s)`}
-          tip="Total des ventes hors taxe sur la période, issu des comptes de la classe 7."
+          tip="Solde créditeur net de tous les comptes de classe 7, depuis l’origine du dossier. Les corrections peuvent rendre ce montant négatif."
         />
         <MetricCard
           title="Résultat comptable"
@@ -4199,7 +4133,7 @@ function Dashboard({ data, entries, metrics, setPage, alertsMuted, setAlertsMute
           />
         )}
       </Card>
-    </>
+    </div>
   );
 }
 
@@ -4212,9 +4146,6 @@ function MetricCard({ title, value, delta, tip }: { title: string; value: ReactN
       </span>
       <span className="wt-stat__value">{value}</span>
       {delta && <span className="wt-stat__note">{delta}</span>}
-      <Suspense fallback={<span className="wt-skeleton wt-skeleton--text" aria-hidden="true" />}>
-        <MetricSparkline data={sparkData} />
-      </Suspense>
     </div>
   );
 }
